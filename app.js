@@ -33,6 +33,9 @@ let polarRenderTimer = null;
 let globalWorker = null;
 let globalGrid = null;
 let globalLayer = null;
+let globalDisplay = null;
+let globalRenderGeneration = 0;
+let globalRenderTimer = null;
 
 const map = L.map("map", { worldCopyJump: true }).setView([25, 0], 2);
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -62,7 +65,7 @@ L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
 const globalLegend = L.control({ position: "bottomright" });
 globalLegend.onAdd = () => {
   const container = L.DomUtil.create("div", "global-legend");
-  container.innerHTML = '<strong>Maximum GDOP</strong><div class="global-legend-gradient"></div><div class="global-legend-labels"><span>1</span><span>5.5</span><span>10+</span></div>';
+  container.innerHTML = '<strong>Maximum GDOP</strong><br><span id="global-resolution">H3 resolution 1</span><div class="global-legend-gradient"></div><div class="global-legend-labels"><span>1</span><span>5.5</span><span>10+</span></div>';
   return container;
 };
 globalLegend.addTo(globalMap);
@@ -378,50 +381,105 @@ function globalGdopColor(value) {
   return `rgb(${channel(0)}, ${channel(1)}, ${channel(2)})`;
 }
 
-function cellBoundaryNearCenter(cell, centerLongitude) {
+function cellBoundaryNearCenter(cell, centerLongitude, longitudeOffset = 0) {
   return window.h3.cellToBoundary(cell).map(([latitude, longitude]) => {
     let adjusted = longitude;
     while (adjusted - centerLongitude > 180) adjusted -= 360;
     while (adjusted - centerLongitude < -180) adjusted += 360;
-    return [latitude, adjusted];
+    return [latitude, adjusted + longitudeOffset];
   });
 }
 
-async function drawGlobalMap(data, rangeLabel) {
+function aggregateGlobalMap(data, rangeLabel) {
+  const grid = prepareGlobalGrid();
+  const levels = Array.from({ length: 4 }, () => new Map());
+  for (let index = 0; index < grid.cells.length; index += 1) {
+    const value = data.maximum[index];
+    for (let resolution = 0; resolution <= 3; resolution += 1) {
+      const cell = resolution === 3 ? grid.cells[index] : window.h3.cellToParent(grid.cells[index], resolution);
+      const previous = levels[resolution].get(cell);
+      if (!previous || (!Number.isFinite(previous.value) && Number.isFinite(value)) || value > previous.value) {
+        levels[resolution].set(cell, { cell, sourceIndex: index, value });
+      }
+    }
+  }
+  return {
+    data,
+    rangeLabel,
+    levels: levels.map((level) => Array.from(level.values()).map((entry) => {
+      const [latitude, longitude] = window.h3.cellToLatLng(entry.cell);
+      return { ...entry, latitude, longitude };
+    })),
+  };
+}
+
+function visibleWorldOffsets() {
+  const bounds = globalMap.getBounds();
+  const first = Math.floor((bounds.getWest() + 180) / 360);
+  const last = Math.floor((bounds.getEast() + 180 - 1e-7) / 360);
+  return Array.from({ length: Math.max(1, last - first + 1) }, (_, index) => (first + index) * 360);
+}
+
+async function renderGlobalMap() {
+  if (!globalDisplay) return;
+  const generation = ++globalRenderGeneration;
   if (globalLayer) globalMap.removeLayer(globalLayer);
   globalLayer = L.layerGroup().addTo(globalMap);
   const grid = prepareGlobalGrid();
+  const resolution = Math.max(0, Math.min(3, Math.floor(globalMap.getZoom())));
+  const entries = globalDisplay.levels[resolution];
+  const worldOffsets = visibleWorldOffsets();
+  const resolutionLabel = document.querySelector("#global-resolution");
+  if (resolutionLabel) resolutionLabel.textContent = `H3 resolution ${resolution}`;
+
+  let drawn = 0;
+  const total = entries.length * worldOffsets.length;
+  for (const longitudeOffset of worldOffsets) {
+    for (let first = 0; first < entries.length; first += 500) {
+      if (generation !== globalRenderGeneration) return;
+      const end = Math.min(entries.length, first + 500);
+      for (let index = first; index < end; index += 1) {
+        const entry = entries[index];
+        const sourceIndex = entry.sourceIndex;
+        const value = entry.value;
+        const time = globalDisplay.data.maximumStep[sourceIndex] >= 0
+          ? new Date((globalDisplay.data.startUnixSeconds + globalDisplay.data.maximumStep[sourceIndex] * globalDisplay.data.intervalSeconds) * 1000)
+            .toISOString().slice(0, 16).replace("T", " ")
+          : "No valid geometry";
+        const sourceDescription = resolution === 3
+          ? `Center ${grid.latitudes[sourceIndex].toFixed(3)}°, ${grid.longitudes[sourceIndex].toFixed(3)}°`
+          : `Worst child center ${grid.latitudes[sourceIndex].toFixed(3)}°, ${grid.longitudes[sourceIndex].toFixed(3)}°`;
+        const popup = Number.isFinite(value)
+          ? `<strong>${entry.cell}</strong><br>${sourceDescription}<br>Maximum GDOP ${value.toFixed(3)}<br>${time} UTC<br>${globalDisplay.data.visible[sourceIndex]} visible satellites`
+          : `<strong>${entry.cell}</strong><br>No valid geometry`;
+        const color = globalGdopColor(value);
+        L.polygon(cellBoundaryNearCenter(entry.cell, entry.longitude, longitudeOffset), {
+          renderer: globalRenderer,
+          stroke: false,
+          fill: true,
+          fillColor: color,
+          fillOpacity: 0.74,
+        }).bindPopup(popup).addTo(globalLayer);
+      }
+      drawn += end - first;
+      elements.globalProgress.value = 0.95 + 0.05 * drawn / total;
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    }
+  }
+}
+
+async function drawGlobalMap(data, rangeLabel) {
+  const grid = prepareGlobalGrid();
   let worstIndex = -1;
   let worstValue = -Infinity;
-
-  for (let first = 0; first < grid.cells.length; first += 500) {
-    const end = Math.min(grid.cells.length, first + 500);
-    for (let index = first; index < end; index += 1) {
-      const value = data.maximum[index];
-      if (Number.isFinite(value) && value > worstValue) {
-        worstValue = value;
-        worstIndex = index;
-      }
-      const time = data.maximumStep[index] >= 0
-        ? new Date((data.startUnixSeconds + data.maximumStep[index] * data.intervalSeconds) * 1000)
-          .toISOString().slice(0, 16).replace("T", " ")
-        : "No valid geometry";
-      const popup = Number.isFinite(value)
-        ? `<strong>${grid.cells[index]}</strong><br>Center ${grid.latitudes[index].toFixed(3)}°, ${grid.longitudes[index].toFixed(3)}°<br>Maximum GDOP ${value.toFixed(3)}<br>${time} UTC<br>${data.visible[index]} visible satellites`
-        : `<strong>${grid.cells[index]}</strong><br>No valid geometry`;
-      L.polygon(cellBoundaryNearCenter(grid.cells[index], grid.longitudes[index]), {
-        renderer: globalRenderer,
-        stroke: false,
-        fill: true,
-        fillColor: globalGdopColor(value),
-        fillOpacity: 0.74,
-      }).bindPopup(popup).addTo(globalLayer);
+  for (let index = 0; index < grid.cells.length; index += 1) {
+    if (Number.isFinite(data.maximum[index]) && data.maximum[index] > worstValue) {
+      worstValue = data.maximum[index];
+      worstIndex = index;
     }
-    elements.globalProgress.value = 0.95 + 0.05 * end / grid.cells.length;
-    elements.globalStatus.value = `Drawing ${end.toLocaleString()} of ${grid.cells.length.toLocaleString()} H3 cells…`;
-    await new Promise((resolve) => requestAnimationFrame(resolve));
   }
-
+  globalDisplay = aggregateGlobalMap(data, rangeLabel);
+  await renderGlobalMap();
   elements.globalProgress.value = 1;
   if (worstIndex >= 0) {
     const worstTime = new Date(
@@ -432,6 +490,15 @@ async function drawGlobalMap(data, rangeLabel) {
     elements.globalStatus.value = `${rangeLabel}: no cells had valid geometry.`;
   }
 }
+
+function scheduleGlobalMapRender() {
+  clearTimeout(globalRenderTimer);
+  globalRenderTimer = setTimeout(renderGlobalMap, 75);
+}
+
+globalMap.on("zoomend moveend", () => {
+  if (globalDisplay) scheduleGlobalMapRender();
+});
 
 function processGlobalRange(which) {
   if (!currentResult || globalWorker) return;

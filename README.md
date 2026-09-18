@@ -8,7 +8,7 @@ Results are shown as both a UTC time-series and a seamless daily heatmap whose r
 The threshold-controlled polar sky view shows every visible satellite position from samples above the selected GDOP value. Zooming the time-series synchronizes the heatmap's visible days; changing the heatmap's day range synchronizes the time-series, while its independent time-of-day zoom further filters the polar view.
 The default calculation window is the previous seven UTC days with a 10° elevation mask. Use **Reset sky view** to restore the full polar view after zooming.
 
-After calculating a location, the global map can process either the first or last 24 hours of the selected range. It evaluates maximum GDOP at the centers of all 41,162 resolution 3 H3 cells using the selected time interval and elevation mask. Satellite propagation runs once per time step in a dedicated worker, while a SIMD WebAssembly kernel evaluates the receiver geometry globally.
+After calculating a location, the global map can process either the first or last 24 hours of the selected range. It evaluates maximum GDOP at the centers of all 41,162 resolution 3 H3 cells using the selected time interval and elevation mask. Satellite propagation runs once per time step in a dedicated worker, while a SIMD WebAssembly kernel evaluates the receiver geometry globally. At lower map zooms, resolution 3 results are aggregated into resolution 0–2 parents using the maximum child value; the overlay repeats across wrapped world copies.
 
 ## Build the compact dataset
 
