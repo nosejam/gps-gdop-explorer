@@ -64,8 +64,33 @@ function updateButton() {
 }
 
 function parseUtcInput(input) {
-  const milliseconds = Date.parse(`${input.value}:00Z`);
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(input.value);
+  if (!match) return NaN;
+  const [, year, month, day, hour, minute, second = "0"] = match;
+  const milliseconds = Date.UTC(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+    Number(second),
+  );
   return Number.isFinite(milliseconds) ? milliseconds / 1000 : NaN;
+}
+
+// Plotly date axes can format Date objects in the browser's local timezone.
+// Supplying the UTC clock fields without a timezone keeps the displayed axis
+// identical on computers in every timezone while calculations retain Unix time.
+function plotUtcValue(date) {
+  return date.toISOString().slice(0, 23);
+}
+
+function parsePlotUtcValue(value) {
+  if (value instanceof Date) return value.getTime() / 1000;
+  const text = String(value).trim().replace(" ", "T");
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(text);
+  const milliseconds = Date.parse(hasTimezone ? text : `${text}Z`);
+  return milliseconds / 1000;
 }
 
 async function loadData() {
@@ -114,15 +139,37 @@ function drawEmptyChart() {
 
   const polarPlot = Plotly.newPlot(
     "polar-chart",
-    [{ theta: [], r: [], type: "scatterpolargl", mode: "markers" }],
+    [{
+      theta: [],
+      r: [],
+      customdata: [],
+      type: "scatterpolargl",
+      mode: "markers",
+      marker: { color: "#146c74", size: 4, opacity: 0.28 },
+      hovertemplate: "PRN %{customdata[0]}<br>%{customdata[1]} UTC<br>GDOP %{customdata[2]:.3f}<br>Azimuth %{customdata[3]:.1f}°<br>Elevation %{customdata[4]:.1f}°<extra></extra>",
+    }],
     {
       height: 620,
       margin: { l: 50, r: 50, t: 38, b: 38 },
       paper_bgcolor: "#fffdf8",
+      showlegend: false,
       polar: {
         bgcolor: "#fffdf8",
-        angularaxis: { direction: "clockwise", rotation: 90 },
-        radialaxis: { range: [0, 90], tickvals: [0, 30, 60, 90], ticktext: ["90°", "60°", "30°", "0°"] },
+        angularaxis: {
+          direction: "clockwise",
+          rotation: 90,
+          tickmode: "array",
+          tickvals: [0, 45, 90, 135, 180, 225, 270, 315],
+          ticktext: ["N", "NE", "E", "SE", "S", "SW", "W", "NW"],
+          gridcolor: "#d9d4c8",
+        },
+        radialaxis: {
+          range: [0, 90],
+          tickvals: [0, 30, 60, 90],
+          ticktext: ["90°", "60°", "30°", "0°"],
+          gridcolor: "#d9d4c8",
+          angle: 90,
+        },
       },
       annotations: [{ text: "Calculate GDOP to populate the sky view", showarrow: false, font: { color: "#607078" } }],
     },
@@ -254,48 +301,24 @@ function drawPolarPlot() {
     showarrow: false,
     font: { color: "#607078" },
   }];
-  Plotly.react(
-    "polar-chart",
-    [{
-      theta,
-      r: radius,
-      customdata: hover,
-      type: "scatterpolargl",
-      mode: "markers",
-      marker: { color: "#146c74", size: 4, opacity: 0.28 },
-      hovertemplate: "PRN %{customdata[0]}<br>%{customdata[1]} UTC<br>GDOP %{customdata[2]:.3f}<br>Azimuth %{customdata[3]:.1f}°<br>Elevation %{customdata[4]:.1f}°<extra></extra>",
-    }],
-    {
-      height: 620,
-      margin: { l: 50, r: 50, t: 38, b: 38 },
-      paper_bgcolor: "#fffdf8",
-      showlegend: false,
-      title: {
-        text: `${theta.length.toLocaleString()} satellite positions from ${qualifyingSamples.toLocaleString()} samples`,
-        font: { size: 13, color: "#607078" },
-      },
-      polar: {
-        bgcolor: "#fffdf8",
-        angularaxis: {
-          direction: "clockwise",
-          rotation: 90,
-          tickmode: "array",
-          tickvals: [0, 45, 90, 135, 180, 225, 270, 315],
-          ticktext: ["N", "NE", "E", "SE", "S", "SW", "W", "NW"],
-          gridcolor: "#d9d4c8",
-        },
-        radialaxis: {
-          range: [0, 90],
-          tickvals: [0, 30, 60, 90],
-          ticktext: ["90°", "60°", "30°", "0°"],
-          gridcolor: "#d9d4c8",
-          angle: 90,
-        },
-      },
+  const title = `${theta.length.toLocaleString()} satellite positions from ${qualifyingSamples.toLocaleString()} samples`;
+  Promise.all([
+    Plotly.restyle(elements.polarChart, {
+      theta: [theta],
+      r: [radius],
+      customdata: [hover],
+      marker: [{ color: "#146c74", size: 4, opacity: 0.28 }],
+      hovertemplate: ["PRN %{customdata[0]}<br>%{customdata[1]} UTC<br>GDOP %{customdata[2]:.3f}<br>Azimuth %{customdata[3]:.1f}°<br>Elevation %{customdata[4]:.1f}°<extra></extra>"],
+    }, [0]),
+    Plotly.relayout(elements.polarChart, {
+      "title.text": title,
+      "title.font.size": 13,
+      "title.font.color": "#607078",
       annotations,
-    },
-    { responsive: true, displaylogo: false },
-  );
+    }),
+  ]).catch((error) => {
+    elements.status.value = `Could not update the sky view: ${error.message}`;
+  });
 }
 
 function rangeFromRelayout(event, axis) {
@@ -326,8 +349,8 @@ function syncLineToHeatmapDays(firstIndex, lastIndex) {
   synchronizingPlots = true;
   Plotly.relayout("chart", {
     "xaxis.range": [
-      new Date(currentResult.viewStart * 1000).toISOString(),
-      new Date(currentResult.viewEnd * 1000).toISOString(),
+      plotUtcValue(new Date(currentResult.viewStart * 1000)),
+      plotUtcValue(new Date(currentResult.viewEnd * 1000)),
     ],
   }).finally(() => { synchronizingPlots = false; });
 }
@@ -352,7 +375,7 @@ function bindPlotSynchronization() {
     }
     const range = rangeFromRelayout(event, "xaxis");
     if (!range) return;
-    const bounds = range.map((value) => Date.parse(value) / 1000).sort((a, b) => a - b);
+    const bounds = range.map(parsePlotUtcValue).sort((a, b) => a - b);
     if (!bounds.every(Number.isFinite)) return;
     currentResult.viewStart = Math.max(currentResult.fullStart, bounds[0]);
     currentResult.viewEnd = Math.min(currentResult.fullEnd, bounds[1]);
@@ -410,6 +433,7 @@ function bindPlotSynchronization() {
 }
 
 elements.threshold.addEventListener("input", schedulePolarRender);
+elements.threshold.addEventListener("change", schedulePolarRender);
 elements.resetPolar.addEventListener("click", () => {
   Plotly.relayout("polar-chart", {
     "polar.radialaxis.range": [0, 90],
@@ -455,6 +479,7 @@ elements.form.addEventListener("submit", (event) => {
     }
     if (data.type === "result") {
       const times = Array.from(data.times, (seconds) => new Date(seconds * 1000));
+      const plotTimes = times.map(plotUtcValue);
       const gdop = Array.from(data.gdop, (value) => (Number.isFinite(value) ? value : null));
       const visible = Array.from(data.visible);
       const valid = gdop.filter((value) => value !== null);
@@ -466,7 +491,7 @@ elements.form.addEventListener("submit", (event) => {
       Plotly.react(
         "chart",
         [{
-          x: times,
+          x: plotTimes,
           y: gdop,
           customdata: visible,
           type: "scattergl",
