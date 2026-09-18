@@ -18,7 +18,7 @@
         <p class="eyebrow">GPS constellation geometry</p>
         <h1>GDOP Explorer</h1>
       </div>
-      <p class="subtitle">Choose a point and a UTC range to calculate receiver geometry from 2026 SEM almanacs.</p>
+      <p class="subtitle">Choose a point and a UTC range to calculate receiver geometry from GPS SEM almanacs.</p>
     </header>
 
     <main>
@@ -112,6 +112,25 @@
         </div>
         <div id="polar-chart" aria-label="Polar plot of satellite locations above the GDOP threshold"></div>
       </section>
+
+      <section class="panel global-panel" aria-labelledby="global-heading">
+        <div class="section-heading global-heading-row">
+          <div>
+            <span class="step">6</span>
+            <h2 id="global-heading">Global maximum GDOP</h2>
+          </div>
+          <div class="global-controls">
+            <button id="global-first" class="secondary-button" type="button" disabled>Process first 24 hours</button>
+            <button id="global-last" class="secondary-button" type="button" disabled>Process last 24 hours</button>
+          </div>
+        </div>
+        <p class="muted global-description">Maximum GDOP at the center of every resolution 3 H3 cell, using the selected interval and elevation mask.</p>
+        <div class="status-row">
+          <progress id="global-progress" max="1" value="0"></progress>
+          <output id="global-status" aria-live="polite">Calculate a location time series first.</output>
+        </div>
+        <div id="global-map" aria-label="Global map of maximum GDOP by H3 cell"></div>
+      </section>
     </main>
 
     <footer>
@@ -124,6 +143,7 @@
       crossorigin=""
     ></script>
     <script src="https://cdn.plot.ly/plotly-4.0.0.min.js" charset="utf-8"></script>
+    <script src="https://cdn.jsdelivr.net/npm/h3-js@4.5.0/dist/h3-js.umd.js"></script>
     <script type="module" src="app.js"></script>
   </body>
 </html>

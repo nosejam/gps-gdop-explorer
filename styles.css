@@ -58,14 +58,31 @@ button:hover:not(:disabled) { background: var(--accent-dark); transform: transla
 button:disabled { cursor: not-allowed; opacity: 0.45; }
 .status-row { display: grid; gap: 9px; padding: 0 20px 20px; }
 progress { width: 100%; height: 6px; accent-color: var(--highlight); }
-#status { color: var(--muted); font-size: 0.8rem; }
-.chart-panel, .heatmap-panel, .polar-panel { grid-column: 1 / -1; }
+#status, #global-status { color: var(--muted); font-size: 0.8rem; }
+.chart-panel, .heatmap-panel, .polar-panel, .global-panel { grid-column: 1 / -1; }
 #chart { width: 100%; height: 460px; }
 #heatmap { width: 100%; min-height: 320px; }
 #polar-chart { width: 100%; height: 620px; }
+#global-map { width: 100%; height: 620px; margin-top: 16px; border-radius: 10px; background: #e7edf0; }
 .threshold-control { display: flex; align-items: center; gap: 9px; white-space: nowrap; }
 .threshold-control input { width: 90px; }
 .polar-controls { display: flex; align-items: center; gap: 12px; }
+.global-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.global-description { margin: 0 0 14px; }
+.global-legend {
+  padding: 8px 10px;
+  background: rgba(255, 253, 248, 0.94);
+  border-radius: 6px;
+  box-shadow: 0 1px 5px rgba(20, 35, 40, 0.28);
+  line-height: 1.35;
+}
+.global-legend-gradient {
+  width: 150px;
+  height: 10px;
+  margin: 5px 0 2px;
+  background: linear-gradient(90deg, #159947, #f1d447 50%, #d64032);
+}
+.global-legend-labels { display: flex; justify-content: space-between; font-size: 0.75rem; }
 .secondary-button {
   width: auto;
   height: 36px;
@@ -83,7 +100,7 @@ footer { padding: 22px 0 34px; color: var(--muted); font-size: 0.76rem; line-hei
 @media (max-width: 800px) {
   header { align-items: start; flex-direction: column; gap: 16px; }
   main { grid-template-columns: 1fr; }
-  .chart-panel, .heatmap-panel, .polar-panel { grid-column: 1; }
+  .chart-panel, .heatmap-panel, .polar-panel, .global-panel { grid-column: 1; }
   #map { height: 330px; }
 }
 
@@ -94,4 +111,5 @@ footer { padding: 22px 0 34px; color: var(--muted); font-size: 0.76rem; line-hei
   .section-heading { align-items: flex-start; flex-direction: column; }
   .polar-heading-row { align-items: stretch; }
   .polar-controls { align-items: stretch; flex-direction: column; }
+  .global-controls { align-items: stretch; flex-direction: column; }
 }

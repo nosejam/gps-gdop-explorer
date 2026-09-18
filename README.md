@@ -8,6 +8,8 @@ Results are shown as both a UTC time-series and a seamless daily heatmap whose r
 The threshold-controlled polar sky view shows every visible satellite position from samples above the selected GDOP value. Zooming the time-series synchronizes the heatmap's visible days; changing the heatmap's day range synchronizes the time-series, while its independent time-of-day zoom further filters the polar view.
 The default calculation window is the previous seven UTC days with a 10° elevation mask. Use **Reset sky view** to restore the full polar view after zooming.
 
+After calculating a location, the global map can process either the first or last 24 hours of the selected range. It evaluates maximum GDOP at the centers of all 41,162 resolution 3 H3 cells using the selected time interval and elevation mask. Satellite propagation runs once per time step in a dedicated worker, while a SIMD WebAssembly kernel evaluates the receiver geometry globally.
+
 ## Build the compact dataset
 
 Download any currently available almanacs that are not already present, then rebuild the compact dataset:
@@ -40,6 +42,13 @@ npm run serve
 
 Open <http://localhost:8000/>. The map tiles and the Leaflet and Plotly libraries require an internet connection; the almanac calculations run locally in a Web Worker.
 
+The compiled WebAssembly module is committed to the repository. To rebuild it after changing `assembly/global-gdop.ts`, install the development dependencies and run:
+
+```bash
+npm install
+npm run build:wasm
+```
+
 ## Publish with GitHub Pages
 
 The workflow in `.github/workflows/pages.yml` rebuilds and deploys the site whenever `main` changes, can be run manually, and checks NAVCEN for new almanacs once per day. When a new file is available, the workflow commits the source almanac and regenerated compact JSON before deploying.
@@ -56,5 +65,6 @@ SEM almanacs for 2024–2026 are downloaded from the [U.S. Coast Guard Navigatio
 - Each timestamp uses the almanac whose reference epoch is closest to it.
 - Timestamps are grouped by almanac, and each satellite is propagated across a group's typed time array before GDOP matrices are inverted.
 - Visible sky positions are returned in a compact per-sample index with azimuth and elevation stored to 0.01° for interactive threshold filtering.
+- The global map samples H3 cell centers; it does not guarantee the maximum everywhere inside each cell. Cells without valid four-satellite geometry are shown in dark gray.
 - Satellites with a nonzero SEM health value or below the selected elevation mask are excluded.
 - Almanac orbits are intentionally low precision and are appropriate for geometry/availability analysis, not precision positioning.

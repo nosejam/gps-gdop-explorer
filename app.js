@@ -17,6 +17,11 @@ const elements = {
   chart: document.querySelector("#chart"),
   heatmap: document.querySelector("#heatmap"),
   polarChart: document.querySelector("#polar-chart"),
+  globalFirst: document.querySelector("#global-first"),
+  globalLast: document.querySelector("#global-last"),
+  globalProgress: document.querySelector("#global-progress"),
+  globalStatus: document.querySelector("#global-status"),
+  globalMap: document.querySelector("#global-map"),
 };
 
 let location = null;
@@ -25,6 +30,9 @@ let worker = null;
 let currentResult = null;
 let synchronizingPlots = false;
 let polarRenderTimer = null;
+let globalWorker = null;
+let globalGrid = null;
+let globalLayer = null;
 
 const map = L.map("map", { worldCopyJump: true }).setView([25, 0], 2);
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -39,6 +47,25 @@ const markerIcon = L.divIcon({
   iconAnchor: [10, 10],
 });
 let marker = null;
+
+const globalMap = L.map("global-map", {
+  worldCopyJump: true,
+  preferCanvas: true,
+  zoomSnap: 0.5,
+}).setView([15, 0], 1.5);
+const globalRenderer = L.canvas({ padding: 0.5 });
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 8,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+}).addTo(globalMap);
+
+const globalLegend = L.control({ position: "bottomright" });
+globalLegend.onAdd = () => {
+  const container = L.DomUtil.create("div", "global-legend");
+  container.innerHTML = '<strong>Maximum GDOP</strong><div class="global-legend-gradient"></div><div class="global-legend-labels"><span>1</span><span>5.5</span><span>10+</span></div>';
+  return container;
+};
+globalLegend.addTo(globalMap);
 
 map.on("click", ({ latlng }) => {
   location = { latitude: latlng.lat, longitude: latlng.lng };
@@ -60,7 +87,13 @@ elements.start.value = utcInputValue(defaultStart);
 elements.end.value = utcInputValue(defaultEnd);
 
 function updateButton() {
-  elements.calculate.disabled = !location || !almanacData || Boolean(worker);
+  elements.calculate.disabled = !location || !almanacData || Boolean(worker) || Boolean(globalWorker);
+}
+
+function updateGlobalButtons() {
+  const disabled = !currentResult || Boolean(globalWorker);
+  elements.globalFirst.disabled = disabled;
+  elements.globalLast.disabled = disabled;
 }
 
 function parseUtcInput(input) {
@@ -321,6 +354,152 @@ function drawPolarPlot() {
   });
 }
 
+function prepareGlobalGrid() {
+  if (globalGrid) return globalGrid;
+  if (!window.h3) throw new Error("The H3 library did not load");
+  const cells = window.h3.getRes0Cells().flatMap((cell) => window.h3.cellToChildren(cell, 3));
+  const latitudes = new Float64Array(cells.length);
+  const longitudes = new Float64Array(cells.length);
+  cells.forEach((cell, index) => {
+    [latitudes[index], longitudes[index]] = window.h3.cellToLatLng(cell);
+  });
+  globalGrid = { cells, latitudes, longitudes };
+  return globalGrid;
+}
+
+function globalGdopColor(value) {
+  if (!Number.isFinite(value)) return "#3d4650";
+  const position = Math.max(0, Math.min(1, (value - 1) / 9));
+  const stops = position <= 0.5
+    ? [[21, 153, 71], [241, 212, 71], position * 2]
+    : [[241, 212, 71], [214, 64, 50], (position - 0.5) * 2];
+  const [start, end, fraction] = stops;
+  const channel = (index) => Math.round(start[index] + (end[index] - start[index]) * fraction);
+  return `rgb(${channel(0)}, ${channel(1)}, ${channel(2)})`;
+}
+
+function cellBoundaryNearCenter(cell, centerLongitude) {
+  return window.h3.cellToBoundary(cell).map(([latitude, longitude]) => {
+    let adjusted = longitude;
+    while (adjusted - centerLongitude > 180) adjusted -= 360;
+    while (adjusted - centerLongitude < -180) adjusted += 360;
+    return [latitude, adjusted];
+  });
+}
+
+async function drawGlobalMap(data, rangeLabel) {
+  if (globalLayer) globalMap.removeLayer(globalLayer);
+  globalLayer = L.layerGroup().addTo(globalMap);
+  const grid = prepareGlobalGrid();
+  let worstIndex = -1;
+  let worstValue = -Infinity;
+
+  for (let first = 0; first < grid.cells.length; first += 500) {
+    const end = Math.min(grid.cells.length, first + 500);
+    for (let index = first; index < end; index += 1) {
+      const value = data.maximum[index];
+      if (Number.isFinite(value) && value > worstValue) {
+        worstValue = value;
+        worstIndex = index;
+      }
+      const time = data.maximumStep[index] >= 0
+        ? new Date((data.startUnixSeconds + data.maximumStep[index] * data.intervalSeconds) * 1000)
+          .toISOString().slice(0, 16).replace("T", " ")
+        : "No valid geometry";
+      const popup = Number.isFinite(value)
+        ? `<strong>${grid.cells[index]}</strong><br>Center ${grid.latitudes[index].toFixed(3)}°, ${grid.longitudes[index].toFixed(3)}°<br>Maximum GDOP ${value.toFixed(3)}<br>${time} UTC<br>${data.visible[index]} visible satellites`
+        : `<strong>${grid.cells[index]}</strong><br>No valid geometry`;
+      L.polygon(cellBoundaryNearCenter(grid.cells[index], grid.longitudes[index]), {
+        renderer: globalRenderer,
+        stroke: false,
+        fill: true,
+        fillColor: globalGdopColor(value),
+        fillOpacity: 0.74,
+      }).bindPopup(popup).addTo(globalLayer);
+    }
+    elements.globalProgress.value = 0.95 + 0.05 * end / grid.cells.length;
+    elements.globalStatus.value = `Drawing ${end.toLocaleString()} of ${grid.cells.length.toLocaleString()} H3 cells…`;
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+  }
+
+  elements.globalProgress.value = 1;
+  if (worstIndex >= 0) {
+    const worstTime = new Date(
+      (data.startUnixSeconds + data.maximumStep[worstIndex] * data.intervalSeconds) * 1000,
+    ).toISOString().slice(0, 16).replace("T", " ");
+    elements.globalStatus.value = `${rangeLabel}: worst sampled GDOP ${worstValue.toFixed(2)} near ${grid.latitudes[worstIndex].toFixed(2)}°, ${grid.longitudes[worstIndex].toFixed(2)}° at ${worstTime} UTC.`;
+  } else {
+    elements.globalStatus.value = `${rangeLabel}: no cells had valid geometry.`;
+  }
+}
+
+function processGlobalRange(which) {
+  if (!currentResult || globalWorker) return;
+  let grid;
+  try {
+    grid = prepareGlobalGrid();
+  } catch (error) {
+    elements.globalStatus.value = error.message;
+    return;
+  }
+
+  const daySeconds = 86_400;
+  const startUnixSeconds = which === "first"
+    ? currentResult.fullStart
+    : Math.max(currentResult.fullStart, currentResult.fullEnd - daySeconds);
+  const endUnixSeconds = which === "first"
+    ? Math.min(currentResult.fullEnd, currentResult.fullStart + daySeconds)
+    : currentResult.fullEnd;
+  const rangeLabel = which === "first" ? "First 24 hours" : "Last 24 hours";
+  globalWorker = new Worker("global-gdop-worker.js");
+  updateGlobalButtons();
+  updateButton();
+  elements.globalProgress.value = 0;
+  elements.globalStatus.value = `Preparing ${grid.cells.length.toLocaleString()} H3 cells…`;
+
+  globalWorker.onmessage = async ({ data }) => {
+    if (data.type === "progress") {
+      elements.globalProgress.value = data.fraction * 0.95;
+      elements.globalStatus.value = data.message;
+      return;
+    }
+    if (data.type === "error") {
+      elements.globalStatus.value = `Global calculation failed: ${data.message}`;
+      globalWorker.terminate();
+      globalWorker = null;
+      updateGlobalButtons();
+      updateButton();
+      return;
+    }
+    if (data.type === "result") {
+      globalWorker.terminate();
+      globalWorker = null;
+      updateGlobalButtons();
+      updateButton();
+      await drawGlobalMap(data, rangeLabel);
+    }
+  };
+  globalWorker.onerror = ({ message }) => {
+    elements.globalStatus.value = `Global calculation failed: ${message}`;
+    globalWorker?.terminate();
+    globalWorker = null;
+    updateGlobalButtons();
+    updateButton();
+  };
+  const latitudes = grid.latitudes.slice();
+  const longitudes = grid.longitudes.slice();
+  globalWorker.postMessage({
+    type: "calculate",
+    almanacs: almanacData.almanacs,
+    latitudes,
+    longitudes,
+    startUnixSeconds,
+    endUnixSeconds,
+    intervalSeconds: currentResult.intervalSeconds,
+    elevationMaskDegrees: currentResult.elevationMaskDegrees,
+  }, [latitudes.buffer, longitudes.buffer]);
+}
+
 function rangeFromRelayout(event, axis) {
   if (Array.isArray(event[`${axis}.range`])) return event[`${axis}.range`];
   const start = event[`${axis}.range[0]`];
@@ -434,6 +613,8 @@ function bindPlotSynchronization() {
 
 elements.threshold.addEventListener("input", schedulePolarRender);
 elements.threshold.addEventListener("change", schedulePolarRender);
+elements.globalFirst.addEventListener("click", () => processGlobalRange("first"));
+elements.globalLast.addEventListener("click", () => processGlobalRange("last"));
 elements.resetPolar.addEventListener("click", () => {
   Plotly.relayout("polar-chart", {
     "polar.radialaxis.range": [0, 90],
@@ -469,6 +650,7 @@ elements.form.addEventListener("submit", (event) => {
   elements.resultSummary.textContent = "";
   elements.threshold.disabled = true;
   currentResult = null;
+  updateGlobalButtons();
   updateButton();
 
   worker.onmessage = ({ data }) => {
@@ -523,6 +705,7 @@ elements.form.addEventListener("submit", (event) => {
           satelliteElevation: data.satelliteElevation,
           satellitePrn: data.satellitePrn,
           intervalSeconds,
+          elevationMaskDegrees,
           days: heatmapMetadata.days,
           columnLabels: heatmapMetadata.columnLabels,
           fullStart: data.times[0],
@@ -533,6 +716,8 @@ elements.form.addEventListener("submit", (event) => {
           timeOfDayEnd: 86_400,
         };
         elements.threshold.disabled = false;
+        elements.globalStatus.value = "Choose the first or last 24 hours to build the global map.";
+        updateGlobalButtons();
         Promise.resolve().then(() => {
           synchronizingPlots = false;
           drawPolarPlot();
