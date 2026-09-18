@@ -1,4 +1,4 @@
-const DATA_URL = "data/almanacs-2026.json";
+const DATA_URL = "data/almanacs.json";
 
 const elements = {
   coordinates: document.querySelector("#coordinates"),
@@ -73,7 +73,7 @@ async function loadData() {
     const response = await fetch(DATA_URL);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     almanacData = await response.json();
-    elements.dataSummary.textContent = `${almanacData.almanacs.length} snapshots · ${almanacData.year}`;
+    elements.dataSummary.textContent = `${almanacData.almanacs.length} snapshots · ${almanacData.years.join("–")}`;
     elements.status.value = "Select a location to begin.";
     updateButton();
   } catch (error) {

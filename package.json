@@ -4,7 +4,7 @@
   "private": true,
   "description": "Interactive GPS GDOP analysis from USCG SEM almanacs",
   "scripts": {
-    "download": "node scripts/download-almanacs.js",
+    "download": "node scripts/download-almanacs.js 2024 2025 2026",
     "build:data": "node scripts/convert-almanacs.js",
     "build": "npm run download && npm run build:data",
     "check": "node --check app.js && node --check gdop-worker.js && node --check scripts/download-almanacs.js && node --check scripts/convert-almanacs.js",

@@ -4,25 +4,20 @@
  * Convert USCG SEM GPS almanacs into the compact JSON used by the browser app.
  *
  * Usage:
- *   node scripts/convert-almanacs.js [input-dir] [output-file] [year]
+ *   node scripts/convert-almanacs.js [input-root] [output-file]
  */
 
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 
-const inputDir = path.resolve(process.argv[2] || "almanacs");
-const outputFile = path.resolve(process.argv[3] || "data/almanacs-2026.json");
-const year = Number(process.argv[4] || 2026);
+const inputRoot = path.resolve(process.argv[2] || "almanacs");
+const outputFile = path.resolve(process.argv[3] || "data/almanacs.json");
 const GPS_EPOCH_UNIX_SECONDS = Date.UTC(1980, 0, 6) / 1000;
 const GPS_WEEK_SECONDS = 604800;
-const GPS_UTC_OFFSET_SECONDS = 18; // Valid throughout 2026.
+const GPS_UTC_OFFSET_SECONDS = 18; // Valid throughout 2024-2026.
 
-if (!Number.isInteger(year) || year < 1980) {
-  throw new Error(`Invalid year: ${process.argv[4]}`);
-}
-
-function archiveDateFromName(fileName) {
+function archiveDateFromName(fileName, year) {
   const match = /^(\d{3})\.al3$/i.exec(fileName);
   if (!match) return null;
   const dayOfYear = Number(match[1]);
@@ -103,23 +98,37 @@ function parseSem(text, fileName, archiveUnixSeconds) {
   return { referenceUnixSeconds, fullWeek, toa, records };
 }
 
-const files = fs
-  .readdirSync(inputDir)
-  .map((fileName) => ({ fileName, archive: archiveDateFromName(fileName) }))
-  .filter((entry) => entry.archive)
-  .sort((a, b) => a.archive.dayOfYear - b.archive.dayOfYear);
+const years = fs
+  .readdirSync(inputRoot, { withFileTypes: true })
+  .filter((entry) => entry.isDirectory() && /^\d{4}$/.test(entry.name))
+  .map((entry) => Number(entry.name))
+  .sort((a, b) => a - b);
 
-if (files.length === 0) throw new Error(`No NNN.al3 files found in ${inputDir}`);
+const files = years.flatMap((year) => {
+  const yearDirectory = path.join(inputRoot, String(year));
+  return fs
+    .readdirSync(yearDirectory)
+    .map((fileName) => ({
+      year,
+      fileName,
+      path: path.join(yearDirectory, fileName),
+      archive: archiveDateFromName(fileName, year),
+    }))
+    .filter((entry) => entry.archive);
+}).sort((a, b) => a.archive.unixSeconds - b.archive.unixSeconds);
+
+if (files.length === 0) throw new Error(`No almanacs/<year>/NNN.al3 files found in ${inputRoot}`);
 
 const seen = new Set();
 const almanacs = [];
-for (const { fileName, archive } of files) {
-  const text = fs.readFileSync(path.join(inputDir, fileName), "utf8");
+for (const { year, fileName, path: filePath, archive } of files) {
+  const sourceName = `${year}/${fileName}`;
+  const text = fs.readFileSync(filePath, "utf8");
   const hash = crypto.createHash("sha256").update(text).digest("hex");
   if (seen.has(hash)) continue;
   seen.add(hash);
 
-  const parsed = parseSem(text, fileName, archive.unixSeconds);
+  const parsed = parseSem(text, sourceName, archive.unixSeconds);
   almanacs.push([
     parsed.referenceUnixSeconds,
     parsed.fullWeek,
@@ -131,7 +140,7 @@ for (const { fileName, archive } of files) {
 almanacs.sort((a, b) => a[0] - b[0]);
 const output = {
   version: 1,
-  year,
+  years,
   gpsUtcOffsetSeconds: GPS_UTC_OFFSET_SECONDS,
   fields: [
     "prn",
@@ -152,5 +161,5 @@ fs.mkdirSync(path.dirname(outputFile), { recursive: true });
 fs.writeFileSync(outputFile, JSON.stringify(output));
 const bytes = fs.statSync(outputFile).size;
 console.log(
-  `Wrote ${almanacs.length} unique almanacs from ${files.length} files to ${outputFile} (${bytes.toLocaleString()} bytes)`,
+  `Wrote ${almanacs.length} unique almanacs for ${years.join(", ")} from ${files.length} files to ${outputFile} (${bytes.toLocaleString()} bytes)`,
 );
