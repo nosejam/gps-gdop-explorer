@@ -1,0 +1,16 @@
+{
+  "name": "gps-gdop-explorer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Interactive GPS GDOP analysis from USCG SEM almanacs",
+  "scripts": {
+    "download": "node scripts/download-almanacs.js",
+    "build:data": "node scripts/convert-almanacs.js",
+    "build": "npm run download && npm run build:data",
+    "check": "node --check app.js && node --check gdop-worker.js && node --check scripts/download-almanacs.js && node --check scripts/convert-almanacs.js",
+    "serve": "python3 -m http.server 8000"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

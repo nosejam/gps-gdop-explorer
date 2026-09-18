@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GPS GDOP Explorer</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <div>
+        <p class="eyebrow">GPS constellation geometry</p>
+        <h1>GDOP Explorer</h1>
+      </div>
+      <p class="subtitle">Choose a point and a UTC range to calculate receiver geometry from 2026 SEM almanacs.</p>
+    </header>
+
+    <main>
+      <section class="panel map-panel" aria-labelledby="location-heading">
+        <div class="section-heading">
+          <div>
+            <span class="step">1</span>
+            <h2 id="location-heading">Select a location</h2>
+          </div>
+          <output id="coordinates">Click the map</output>
+        </div>
+        <div id="map" aria-label="Interactive location map"></div>
+      </section>
+
+      <section class="panel controls-panel" aria-labelledby="range-heading">
+        <div class="section-heading">
+          <div>
+            <span class="step">2</span>
+            <h2 id="range-heading">Set the UTC range</h2>
+          </div>
+          <span id="data-summary" class="muted">Loading almanacs…</span>
+        </div>
+
+        <form id="controls">
+          <label>
+            Start (UTC)
+            <input id="start-time" type="datetime-local" step="60" required />
+          </label>
+          <label>
+            End (UTC)
+            <input id="end-time" type="datetime-local" step="60" required />
+          </label>
+          <label>
+            Interval
+            <span class="input-with-unit">
+              <input id="interval" type="number" min="1" max="1440" value="1" required />
+              <span>minutes</span>
+            </span>
+          </label>
+          <label>
+            Elevation mask
+            <span class="input-with-unit">
+              <input id="elevation-mask" type="number" min="0" max="45" step="1" value="10" required />
+              <span>degrees</span>
+            </span>
+          </label>
+          <button id="calculate" type="submit" disabled>Calculate GDOP</button>
+        </form>
+
+        <div class="status-row">
+          <progress id="progress" max="1" value="0"></progress>
+          <output id="status" aria-live="polite">Select a location to begin.</output>
+        </div>
+      </section>
+
+      <section class="panel chart-panel" aria-labelledby="chart-heading">
+        <div class="section-heading">
+          <div>
+            <span class="step">3</span>
+            <h2 id="chart-heading">Geometry dilution of precision</h2>
+          </div>
+          <span id="result-summary" class="muted"></span>
+        </div>
+        <div id="chart" aria-label="GDOP time series"></div>
+      </section>
+
+      <section class="panel heatmap-panel" aria-labelledby="heatmap-heading">
+        <div class="section-heading">
+          <div>
+            <span class="step">4</span>
+            <h2 id="heatmap-heading">Daily GDOP grid</h2>
+          </div>
+          <span class="muted">UTC day × time of day</span>
+        </div>
+        <div id="heatmap" aria-label="Daily GDOP heatmap"></div>
+      </section>
+
+      <section class="panel polar-panel" aria-labelledby="polar-heading">
+        <div class="section-heading polar-heading-row">
+          <div>
+            <span class="step">5</span>
+            <h2 id="polar-heading">Satellite sky view</h2>
+          </div>
+          <div class="polar-controls">
+            <label class="threshold-control">
+              GDOP above
+              <input id="gdop-threshold" type="number" min="0" step="0.1" value="3" disabled />
+            </label>
+            <button id="reset-polar" class="secondary-button" type="button">Reset sky view</button>
+          </div>
+        </div>
+        <div id="polar-chart" aria-label="Polar plot of satellite locations above the GDOP threshold"></div>
+      </section>
+    </main>
+
+    <footer>
+      Almanac-based positions are approximate. Times are UTC; unhealthy satellites and satellites below the elevation mask are excluded.
+    </footer>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="https://cdn.plot.ly/plotly-4.0.0.min.js" charset="utf-8"></script>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
