@@ -126,12 +126,6 @@ function createGlobalMap() {
 const globalView = createGlobalMap();
 let globalDetailMarker = null;
 
-globalView.map.on("click", ({ latlng }) => {
-  if (!baselineRequest || !globalView.display) return;
-  const longitude = ((latlng.lng + 180) % 360 + 360) % 360 - 180;
-  processGlobalDetail(latlng.lat, longitude);
-});
-
 map.on("click", ({ latlng }) => {
   location = { latitude: latlng.lat, longitude: latlng.lng };
   if (!marker) marker = L.marker(latlng, { icon: markerIcon }).addTo(map);
@@ -486,6 +480,25 @@ function visibleWorldOffsets(view) {
   return Array.from({ length: Math.max(1, last - first + 1) }, (_, index) => (first + index) * 360);
 }
 
+function globalCellPopup(entry, sourceDescription, value, time, visible, latitude, longitude) {
+  const container = document.createElement("div");
+  container.className = "global-cell-popup";
+  const details = document.createElement("div");
+  details.innerHTML = Number.isFinite(value)
+    ? `<strong>${entry.cell}</strong><br>${sourceDescription}<br>Maximum GDOP ${value.toFixed(3)}<br>${time} UTC<br>${visible} visible satellites`
+    : `<strong>${entry.cell}</strong><br>No valid geometry`;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = "Chart this location";
+  button.disabled = !baselineRequest || !globalView.display;
+  button.addEventListener("click", () => {
+    globalView.map.closePopup();
+    processGlobalDetail(latitude, longitude);
+  });
+  container.append(details, button);
+  return container;
+}
+
 async function renderGlobalMap(view) {
   if (!view.display) return;
   const generation = ++view.renderGeneration;
@@ -515,9 +528,8 @@ async function renderGlobalMap(view) {
         const sourceDescription = resolution === 3
           ? `Center ${grid.latitudes[sourceIndex].toFixed(3)}°, ${grid.longitudes[sourceIndex].toFixed(3)}°`
           : `Worst child center ${grid.latitudes[sourceIndex].toFixed(3)}°, ${grid.longitudes[sourceIndex].toFixed(3)}°`;
-        const popup = Number.isFinite(value)
-          ? `<strong>${entry.cell}</strong><br>${sourceDescription}<br>Maximum GDOP ${value.toFixed(3)}<br>${time} UTC<br>${view.display.data.visible[sourceIndex]} visible satellites`
-          : `<strong>${entry.cell}</strong><br>No valid geometry`;
+        const latitude = grid.latitudes[sourceIndex];
+        const longitude = grid.longitudes[sourceIndex];
         const color = globalGdopColor(value);
         L.polygon(cellBoundaryNearCenter(entry.cell, entry.longitude, longitudeOffset), {
           renderer: view.renderer,
@@ -525,7 +537,15 @@ async function renderGlobalMap(view) {
           fill: true,
           fillColor: color,
           fillOpacity: 0.74,
-        }).bindPopup(popup).addTo(view.layer);
+        }).bindPopup(() => globalCellPopup(
+          entry,
+          sourceDescription,
+          value,
+          time,
+          view.display.data.visible[sourceIndex],
+          latitude,
+          longitude,
+        )).addTo(view.layer);
       }
       drawn += end - first;
       await new Promise((resolve) => requestAnimationFrame(resolve));
