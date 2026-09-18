@@ -25,14 +25,19 @@ const elements = {
   addAdjustment: document.querySelector("#add-adjustment"),
   applyAdjustments: document.querySelector("#apply-adjustments"),
   adjustmentDialog: document.querySelector("#adjustment-dialog"),
+  adjustmentDialogTitle: document.querySelector("#adjustment-dialog-title"),
   adjustmentForm: document.querySelector("#adjustment-form"),
   adjustmentPrn: document.querySelector("#adjustment-prn"),
   adjustmentSeconds: document.querySelector("#adjustment-seconds"),
   cancelAdjustment: document.querySelector("#cancel-adjustment"),
   adjustmentList: document.querySelector("#adjustment-list"),
-  comparisonProgress: document.querySelector("#comparison-progress"),
-  comparisonStatus: document.querySelector("#comparison-status"),
-  comparisonMap: document.querySelector("#comparison-map"),
+  toggleAdjustments: document.querySelector("#toggle-adjustments"),
+  globalMapLayout: document.querySelector("#global-map-layout"),
+  globalDetail: document.querySelector("#global-detail"),
+  globalDetailLocation: document.querySelector("#global-detail-location"),
+  globalDetailStatus: document.querySelector("#global-detail-status"),
+  globalSpikeChart: document.querySelector("#global-spike-chart"),
+  globalSkyChart: document.querySelector("#global-sky-chart"),
 };
 
 let location = null;
@@ -43,10 +48,13 @@ let synchronizingPlots = false;
 let polarRenderTimer = null;
 let globalWorker = null;
 let comparisonWorker = null;
+let globalDetailWorker = null;
 let globalGrid = null;
 let baselineRequest = null;
 let availableAdjustmentPrns = [];
 const satelliteAdjustments = new Map();
+let editingAdjustmentPrn = null;
+let globalDetailResult = null;
 
 const map = L.map("map", { worldCopyJump: true }).setView([25, 0], 2);
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -62,8 +70,8 @@ const markerIcon = L.divIcon({
 });
 let marker = null;
 
-function createGlobalMap(elementId, resolutionId) {
-  const leafletMap = L.map(elementId, {
+function createGlobalMap() {
+  const leafletMap = L.map("global-map", {
     worldCopyJump: true,
     preferCanvas: true,
     zoomSnap: 0.5,
@@ -75,23 +83,54 @@ function createGlobalMap(elementId, resolutionId) {
   const legend = L.control({ position: "bottomright" });
   legend.onAdd = () => {
     const container = L.DomUtil.create("div", "global-legend");
-    container.innerHTML = `<strong>Maximum GDOP</strong><br><span id="${resolutionId}">H3 resolution 1</span><div class="global-legend-gradient"></div><div class="global-legend-labels"><span>1</span><span>5.5</span><span>10+</span></div>`;
+    container.innerHTML = '<strong>Maximum GDOP</strong><br><span id="global-resolution">H3 resolution 1</span><div class="global-legend-gradient"></div><div class="global-legend-labels"><span>1</span><span>5.5</span><span>10+</span></div>';
     return container;
   };
   legend.addTo(leafletMap);
-  return {
+  const choices = {
+    baseline: L.layerGroup().addTo(leafletMap),
+    adjusted: L.layerGroup(),
+  };
+  L.control.layers({
+    "Real SEM almanac": choices.baseline,
+    "Adjusted SEM almanac": choices.adjusted,
+  }, null, { collapsed: false, position: "topright" }).addTo(leafletMap);
+  const view = {
     map: leafletMap,
     renderer: L.canvas({ padding: 0.5 }),
-    resolutionId,
+    resolutionId: "global-resolution",
     layer: null,
     display: null,
+    datasets: { baseline: null, adjusted: null },
+    activeKey: "baseline",
+    choices,
     renderGeneration: 0,
     renderTimer: null,
   };
+  leafletMap.on("baselayerchange", ({ layer }) => {
+    view.activeKey = layer === choices.adjusted ? "adjusted" : "baseline";
+    view.display = view.datasets[view.activeKey];
+    if (view.display) {
+      scheduleGlobalMapRender(view);
+      if (view.display.summary) elements.globalStatus.value = view.display.summary;
+      if (globalDetailResult) processGlobalDetail(globalDetailResult.latitude, globalDetailResult.longitude);
+    } else {
+      if (view.layer) leafletMap.removeLayer(view.layer);
+      view.layer = null;
+      elements.globalStatus.value = "Process this almanac layer before viewing it.";
+    }
+  });
+  return view;
 }
 
-const baselineView = createGlobalMap("global-map", "global-resolution");
-const comparisonView = createGlobalMap("comparison-map", "comparison-resolution");
+const globalView = createGlobalMap();
+let globalDetailMarker = null;
+
+globalView.map.on("click", ({ latlng }) => {
+  if (!baselineRequest || !globalView.display) return;
+  const longitude = ((latlng.lng + 180) % 360 + 360) % 360 - 180;
+  processGlobalDetail(latlng.lat, longitude);
+});
 
 map.on("click", ({ latlng }) => {
   location = { latitude: latlng.lat, longitude: latlng.lng };
@@ -113,16 +152,17 @@ elements.start.value = utcInputValue(defaultStart);
 elements.end.value = utcInputValue(defaultEnd);
 
 function updateButton() {
-  elements.calculate.disabled = !location || !almanacData || Boolean(worker) || Boolean(globalWorker) || Boolean(comparisonWorker);
+  elements.calculate.disabled = !location || !almanacData || Boolean(worker) || Boolean(globalWorker) || Boolean(comparisonWorker) || Boolean(globalDetailWorker);
 }
 
 function updateGlobalButtons() {
-  const disabled = !currentResult || Boolean(globalWorker) || Boolean(comparisonWorker);
+  const disabled = !currentResult || Boolean(globalWorker) || Boolean(comparisonWorker) || Boolean(globalDetailWorker);
   elements.globalFirst.disabled = disabled;
   elements.globalLast.disabled = disabled;
-  elements.addAdjustment.disabled = !baselineRequest || Boolean(comparisonWorker);
+  elements.addAdjustment.disabled =
+    !baselineRequest || Boolean(globalWorker) || Boolean(comparisonWorker) || Boolean(globalDetailWorker);
   elements.applyAdjustments.disabled =
-    !baselineRequest || satelliteAdjustments.size === 0 || Boolean(comparisonWorker);
+    !baselineRequest || satelliteAdjustments.size === 0 || Boolean(globalWorker) || Boolean(comparisonWorker) || Boolean(globalDetailWorker);
 }
 
 function parseUtcInput(input) {
@@ -493,7 +533,7 @@ async function renderGlobalMap(view) {
   }
 }
 
-async function drawGlobalMap(view, data, rangeLabel, progress, status) {
+async function drawGlobalMap(view, datasetKey, data, rangeLabel, progress, status) {
   const grid = prepareGlobalGrid();
   let worstIndex = -1;
   let worstValue = -Infinity;
@@ -503,9 +543,11 @@ async function drawGlobalMap(view, data, rangeLabel, progress, status) {
       worstIndex = index;
     }
   }
-  view.display = aggregateGlobalMap(data, rangeLabel);
-  view.worstValue = worstValue;
-  view.worstIndex = worstIndex;
+  const dataset = aggregateGlobalMap(data, rangeLabel);
+  dataset.worstValue = worstValue;
+  dataset.worstIndex = worstIndex;
+  view.datasets[datasetKey] = dataset;
+  view.display = view.datasets[view.activeKey];
   await renderGlobalMap(view);
   progress.value = 1;
   if (worstIndex >= 0) {
@@ -516,6 +558,7 @@ async function drawGlobalMap(view, data, rangeLabel, progress, status) {
   } else {
     status.value = `${rangeLabel}: no cells had valid geometry.`;
   }
+  dataset.summary = status.value;
 }
 
 function scheduleGlobalMapRender(view) {
@@ -523,14 +566,12 @@ function scheduleGlobalMapRender(view) {
   view.renderTimer = setTimeout(() => renderGlobalMap(view), 75);
 }
 
-for (const view of [baselineView, comparisonView]) {
-  view.map.on("zoomend moveend", () => {
-    if (view.display) scheduleGlobalMapRender(view);
-  });
-}
+globalView.map.on("zoomend moveend", () => {
+  if (globalView.display) scheduleGlobalMapRender(globalView);
+});
 
 function processGlobalRange(which) {
-  if (!currentResult || globalWorker || comparisonWorker) return;
+  if (!currentResult || globalWorker || comparisonWorker || globalDetailWorker) return;
   let grid;
   try {
     grid = prepareGlobalGrid();
@@ -550,11 +591,15 @@ function processGlobalRange(which) {
   baselineRequest = null;
   satelliteAdjustments.clear();
   renderAdjustmentList();
-  comparisonView.display = null;
-  if (comparisonView.layer) comparisonView.map.removeLayer(comparisonView.layer);
-  comparisonView.layer = null;
-  elements.comparisonProgress.value = 0;
-  elements.comparisonStatus.value = "Waiting for the new baseline map.";
+  globalView.datasets = { baseline: null, adjusted: null };
+  globalView.activeKey = "baseline";
+  globalView.display = null;
+  if (globalView.layer) globalView.map.removeLayer(globalView.layer);
+  globalView.layer = null;
+  globalView.map.removeLayer(globalView.choices.adjusted);
+  globalView.choices.baseline.addTo(globalView.map);
+  elements.globalDetail.hidden = true;
+  globalDetailResult = null;
   globalWorker = new Worker("global-gdop-worker.js");
   updateGlobalButtons();
   updateButton();
@@ -579,7 +624,8 @@ function processGlobalRange(which) {
       globalWorker.terminate();
       globalWorker = null;
       updateButton();
-      await drawGlobalMap(baselineView, data, rangeLabel, elements.globalProgress, elements.globalStatus);
+      await drawGlobalMap(globalView, "baseline", data, rangeLabel, elements.globalProgress, elements.globalStatus);
+      globalView.datasets.baseline.adjustments = [];
       baselineRequest = {
         startUnixSeconds,
         endUnixSeconds,
@@ -589,7 +635,6 @@ function processGlobalRange(which) {
       };
       availableAdjustmentPrns = adjustmentPrnsForRange(baselineRequest);
       populateAdjustmentPrns();
-      elements.comparisonStatus.value = "Add one or more satellite phase adjustments.";
       updateGlobalButtons();
     }
   };
@@ -652,6 +697,15 @@ function populateAdjustmentPrns() {
   }));
 }
 
+function openAdjustmentDialog(prn = null) {
+  editingAdjustmentPrn = prn;
+  populateAdjustmentPrns();
+  elements.adjustmentDialogTitle.textContent = prn === null ? "Add satellite adjustment" : `Edit PRN ${prn} adjustment`;
+  elements.adjustmentPrn.value = String(prn ?? availableAdjustmentPrns[0] ?? "");
+  elements.adjustmentSeconds.value = prn === null ? "0" : String(satelliteAdjustments.get(prn));
+  elements.adjustmentDialog.showModal();
+}
+
 function renderAdjustmentList() {
   if (satelliteAdjustments.size === 0) {
     const empty = document.createElement("p");
@@ -666,6 +720,11 @@ function renderAdjustmentList() {
         row.className = "adjustment-row";
         const text = document.createElement("span");
         text.textContent = `PRN ${prn}: ${seconds > 0 ? "+" : ""}${seconds} s`;
+        const edit = document.createElement("button");
+        edit.type = "button";
+        edit.className = "secondary-button";
+        edit.textContent = "Edit";
+        edit.addEventListener("click", () => openAdjustmentDialog(prn));
         const remove = document.createElement("button");
         remove.type = "button";
         remove.className = "secondary-button";
@@ -673,8 +732,11 @@ function renderAdjustmentList() {
         remove.addEventListener("click", () => {
           satelliteAdjustments.delete(prn);
           renderAdjustmentList();
+          if (globalView.datasets.adjusted) {
+            elements.globalStatus.value = "Adjustments changed. Apply them to refresh the adjusted layer.";
+          }
         });
-        row.append(text, remove);
+        row.append(text, edit, remove);
         return row;
       });
     elements.adjustmentList.replaceChildren(...rows);
@@ -683,22 +745,22 @@ function renderAdjustmentList() {
 }
 
 function processAdjustedGlobalMap() {
-  if (!baselineRequest || comparisonWorker || satelliteAdjustments.size === 0) return;
+  if (!baselineRequest || globalWorker || comparisonWorker || globalDetailWorker || satelliteAdjustments.size === 0) return;
   const grid = prepareGlobalGrid();
   const adjustments = Array.from(satelliteAdjustments.entries());
   comparisonWorker = new Worker("global-gdop-worker.js");
   updateGlobalButtons();
   updateButton();
-  elements.comparisonProgress.value = 0;
-  elements.comparisonStatus.value = `Applying ${adjustments.length} satellite adjustment${adjustments.length === 1 ? "" : "s"}…`;
+  elements.globalProgress.value = 0;
+  elements.globalStatus.value = `Applying ${adjustments.length} satellite adjustment${adjustments.length === 1 ? "" : "s"}…`;
   comparisonWorker.onmessage = async ({ data }) => {
     if (data.type === "progress") {
-      elements.comparisonProgress.value = data.fraction * 0.95;
-      elements.comparisonStatus.value = data.message.replace("Global map", "Adjusted map");
+      elements.globalProgress.value = data.fraction * 0.95;
+      elements.globalStatus.value = data.message.replace("Global map", "Adjusted map");
       return;
     }
     if (data.type === "error") {
-      elements.comparisonStatus.value = `Adjusted calculation failed: ${data.message}`;
+      elements.globalStatus.value = `Adjusted calculation failed: ${data.message}`;
       comparisonWorker.terminate();
       comparisonWorker = null;
       updateGlobalButtons();
@@ -709,22 +771,29 @@ function processAdjustedGlobalMap() {
       comparisonWorker.terminate();
       comparisonWorker = null;
       await drawGlobalMap(
-        comparisonView,
+        globalView,
+        "adjusted",
         data,
         `${baselineRequest.rangeLabel}, adjusted`,
-        elements.comparisonProgress,
-        elements.comparisonStatus,
+        elements.globalProgress,
+        elements.globalStatus,
       );
-      if (Number.isFinite(baselineView.worstValue) && Number.isFinite(comparisonView.worstValue)) {
-        const difference = comparisonView.worstValue - baselineView.worstValue;
-        elements.comparisonStatus.value += ` Global worst-case change: ${difference >= 0 ? "+" : ""}${difference.toFixed(2)} GDOP.`;
+      globalView.datasets.adjusted.adjustments = adjustments;
+      const baselineWorst = globalView.datasets.baseline?.worstValue;
+      const adjustedWorst = globalView.datasets.adjusted.worstValue;
+      if (Number.isFinite(baselineWorst) && Number.isFinite(adjustedWorst)) {
+        const difference = adjustedWorst - baselineWorst;
+        elements.globalStatus.value += ` Global worst-case change: ${difference >= 0 ? "+" : ""}${difference.toFixed(2)} GDOP.`;
       }
+      globalView.datasets.adjusted.summary = elements.globalStatus.value;
+      globalView.map.removeLayer(globalView.choices.baseline);
+      globalView.choices.adjusted.addTo(globalView.map);
       updateGlobalButtons();
       updateButton();
     }
   };
   comparisonWorker.onerror = ({ message }) => {
-    elements.comparisonStatus.value = `Adjusted calculation failed: ${message}`;
+    elements.globalStatus.value = `Adjusted calculation failed: ${message}`;
     comparisonWorker?.terminate();
     comparisonWorker = null;
     updateGlobalButtons();
@@ -740,6 +809,175 @@ function processAdjustedGlobalMap() {
     ...baselineRequest,
     adjustments,
   }, [latitudes.buffer, longitudes.buffer]);
+}
+
+let globalDetailPlotBound = false;
+
+function drawGlobalDetailSky() {
+  if (!globalDetailResult) return;
+  const theta = [];
+  const radius = [];
+  const hover = [];
+  let samples = 0;
+  for (let sample = 0; sample < globalDetailResult.timeSeconds.length; sample += 1) {
+    const time = globalDetailResult.timeSeconds[sample];
+    if (time < globalDetailResult.viewStart || time > globalDetailResult.viewEnd) continue;
+    samples += 1;
+    const timestamp = new Date(time * 1000).toISOString().slice(0, 16).replace("T", " ");
+    for (
+      let observation = globalDetailResult.satelliteOffsets[sample];
+      observation < globalDetailResult.satelliteOffsets[sample + 1];
+      observation += 1
+    ) {
+      const elevation = globalDetailResult.satelliteElevation[observation] / 100;
+      theta.push(globalDetailResult.satelliteAzimuth[observation] / 100);
+      radius.push(90 - elevation);
+      hover.push([
+        globalDetailResult.satellitePrn[observation],
+        timestamp,
+        globalDetailResult.gdop[sample],
+        elevation,
+      ]);
+    }
+  }
+  Plotly.react(elements.globalSkyChart, [{
+    theta,
+    r: radius,
+    customdata: hover,
+    type: "scatterpolargl",
+    mode: "markers",
+    marker: { color: "#146c74", size: 4, opacity: 0.3 },
+    hovertemplate: "PRN %{customdata[0]}<br>%{customdata[1]} UTC<br>GDOP %{customdata[2]:.3f}<br>Elevation %{customdata[3]:.1f}°<extra></extra>",
+  }], {
+    height: 560,
+    margin: { l: 50, r: 50, t: 42, b: 38 },
+    paper_bgcolor: "#fffdf8",
+    showlegend: false,
+    title: { text: `${theta.length.toLocaleString()} satellite positions from ${samples.toLocaleString()} samples`, font: { size: 13, color: "#607078" } },
+    polar: {
+      bgcolor: "#fffdf8",
+      angularaxis: {
+        direction: "clockwise",
+        rotation: 90,
+        tickmode: "array",
+        tickvals: [0, 45, 90, 135, 180, 225, 270, 315],
+        ticktext: ["N", "NE", "E", "SE", "S", "SW", "W", "NW"],
+        gridcolor: "#d9d4c8",
+      },
+      radialaxis: {
+        range: [0, 90],
+        tickvals: [0, 30, 60, 90],
+        ticktext: ["90°", "60°", "30°", "0°"],
+        gridcolor: "#d9d4c8",
+        angle: 90,
+      },
+    },
+  }, { responsive: true, displaylogo: false });
+}
+
+function drawGlobalDetail(data, latitude, longitude, layerName) {
+  const times = Array.from(data.times, (seconds) => new Date(seconds * 1000));
+  const gdop = Array.from(data.gdop, (value) => (Number.isFinite(value) ? value : null));
+  globalDetailResult = {
+    latitude,
+    longitude,
+    layerName,
+    timeSeconds: data.times,
+    gdop,
+    satelliteOffsets: data.satelliteOffsets,
+    satelliteAzimuth: data.satelliteAzimuth,
+    satelliteElevation: data.satelliteElevation,
+    satellitePrn: data.satellitePrn,
+    viewStart: data.times[0],
+    viewEnd: data.times[data.times.length - 1],
+  };
+  Plotly.react(elements.globalSpikeChart, [{
+    x: times.map(plotUtcValue),
+    y: gdop,
+    customdata: Array.from(data.visible),
+    type: "scattergl",
+    mode: "lines",
+    line: { color: "#9d3f2c", width: 1.4 },
+    hovertemplate: "%{x|%Y-%m-%d %H:%M} UTC<br>GDOP %{y:.3f}<br>%{customdata} satellites<extra></extra>",
+    connectgaps: false,
+  }], {
+    height: 400,
+    margin: { l: 58, r: 24, t: 32, b: 58 },
+    paper_bgcolor: "#fffdf8",
+    plot_bgcolor: "#fffdf8",
+    title: { text: `${layerName} — GDOP over time`, font: { size: 14 } },
+    xaxis: { title: "UTC time", gridcolor: "#e4e0d7" },
+    yaxis: { title: "GDOP", rangemode: "tozero", gridcolor: "#e4e0d7" },
+  }, { responsive: true, displaylogo: false }).then(() => {
+    if (globalDetailPlotBound) return;
+    globalDetailPlotBound = true;
+    elements.globalSpikeChart.on("plotly_relayout", (event) => {
+      if (!globalDetailResult) return;
+      if (event["xaxis.autorange"]) {
+        globalDetailResult.viewStart = globalDetailResult.timeSeconds[0];
+        globalDetailResult.viewEnd = globalDetailResult.timeSeconds[globalDetailResult.timeSeconds.length - 1];
+      } else {
+        const range = rangeFromRelayout(event, "xaxis");
+        if (!range) return;
+        const bounds = range.map(parsePlotUtcValue).sort((a, b) => a - b);
+        if (!bounds.every(Number.isFinite)) return;
+        globalDetailResult.viewStart = Math.max(globalDetailResult.timeSeconds[0], bounds[0]);
+        globalDetailResult.viewEnd = Math.min(
+          globalDetailResult.timeSeconds[globalDetailResult.timeSeconds.length - 1],
+          bounds[1],
+        );
+      }
+      drawGlobalDetailSky();
+    });
+  });
+  drawGlobalDetailSky();
+  elements.globalDetailStatus.textContent = `${layerName} · ${gdop.filter((value) => value !== null).length.toLocaleString()} valid samples`;
+}
+
+function processGlobalDetail(latitude, longitude) {
+  const dataset = globalView.datasets[globalView.activeKey];
+  if (!baselineRequest || !dataset) return;
+  globalDetailWorker?.terminate();
+  globalDetailWorker = new Worker("gdop-worker.js");
+  elements.globalDetail.hidden = false;
+  elements.globalDetailLocation.textContent = `${latitude.toFixed(4)}°, ${longitude.toFixed(4)}°`;
+  elements.globalDetailStatus.textContent = "Calculating selected location…";
+  if (!globalDetailMarker) globalDetailMarker = L.marker([latitude, longitude]).addTo(globalView.map);
+  else globalDetailMarker.setLatLng([latitude, longitude]);
+  const layerName = globalView.activeKey === "adjusted" ? "Adjusted SEM almanac" : "Real SEM almanac";
+  globalDetailWorker.onmessage = ({ data }) => {
+    if (data.type === "progress") {
+      elements.globalDetailStatus.textContent = data.message;
+      return;
+    }
+    if (data.type === "result") {
+      globalDetailWorker.terminate();
+      globalDetailWorker = null;
+      drawGlobalDetail(data, latitude, longitude, layerName);
+      updateGlobalButtons();
+      updateButton();
+    }
+  };
+  globalDetailWorker.onerror = ({ message }) => {
+    elements.globalDetailStatus.textContent = `Selected-location calculation failed: ${message}`;
+    globalDetailWorker?.terminate();
+    globalDetailWorker = null;
+    updateGlobalButtons();
+    updateButton();
+  };
+  updateGlobalButtons();
+  updateButton();
+  globalDetailWorker.postMessage({
+    type: "calculate",
+    almanacs: almanacData.almanacs,
+    latitudeDegrees: latitude,
+    longitudeDegrees: longitude,
+    startUnixSeconds: baselineRequest.startUnixSeconds,
+    endUnixSeconds: baselineRequest.endUnixSeconds,
+    intervalSeconds: baselineRequest.intervalSeconds,
+    elevationMaskDegrees: baselineRequest.elevationMaskDegrees,
+    adjustments: dataset.adjustments || [],
+  });
 }
 
 function rangeFromRelayout(event, axis) {
@@ -857,11 +1095,7 @@ elements.threshold.addEventListener("input", schedulePolarRender);
 elements.threshold.addEventListener("change", schedulePolarRender);
 elements.globalFirst.addEventListener("click", () => processGlobalRange("first"));
 elements.globalLast.addEventListener("click", () => processGlobalRange("last"));
-elements.addAdjustment.addEventListener("click", () => {
-  populateAdjustmentPrns();
-  elements.adjustmentSeconds.value = "0";
-  elements.adjustmentDialog.showModal();
-});
+elements.addAdjustment.addEventListener("click", () => openAdjustmentDialog());
 elements.cancelAdjustment.addEventListener("click", () => elements.adjustmentDialog.close());
 elements.adjustmentForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -873,14 +1107,27 @@ elements.adjustmentForm.addEventListener("submit", (event) => {
     return;
   }
   elements.adjustmentSeconds.setCustomValidity("");
+  if (editingAdjustmentPrn !== null && editingAdjustmentPrn !== prn) {
+    satelliteAdjustments.delete(editingAdjustmentPrn);
+  }
   satelliteAdjustments.set(prn, seconds);
+  editingAdjustmentPrn = null;
   elements.adjustmentDialog.close();
   renderAdjustmentList();
+  if (globalView.datasets.adjusted) {
+    elements.globalStatus.value = "Adjustments changed. Apply them to refresh the adjusted layer.";
+  }
 });
 elements.adjustmentSeconds.addEventListener("input", () => {
   elements.adjustmentSeconds.setCustomValidity("");
 });
 elements.applyAdjustments.addEventListener("click", processAdjustedGlobalMap);
+elements.toggleAdjustments.addEventListener("click", () => {
+  const collapsed = elements.globalMapLayout.classList.toggle("sidebar-collapsed");
+  elements.toggleAdjustments.textContent = collapsed ? "Show adjustments" : "Hide adjustments";
+  elements.toggleAdjustments.setAttribute("aria-expanded", String(!collapsed));
+  setTimeout(() => globalView.map.invalidateSize(), 200);
+});
 elements.resetPolar.addEventListener("click", () => {
   Plotly.relayout("polar-chart", {
     "polar.radialaxis.range": [0, 90],
@@ -920,7 +1167,19 @@ elements.form.addEventListener("submit", (event) => {
   availableAdjustmentPrns = [];
   satelliteAdjustments.clear();
   renderAdjustmentList();
-  elements.comparisonStatus.value = "Process a baseline global map first.";
+  globalView.datasets = { baseline: null, adjusted: null };
+  globalView.activeKey = "baseline";
+  globalView.display = null;
+  if (globalView.layer) globalView.map.removeLayer(globalView.layer);
+  globalView.layer = null;
+  globalView.map.removeLayer(globalView.choices.adjusted);
+  globalView.choices.baseline.addTo(globalView.map);
+  elements.globalDetail.hidden = true;
+  globalDetailResult = null;
+  if (globalDetailMarker) {
+    globalView.map.removeLayer(globalDetailMarker);
+    globalDetailMarker = null;
+  }
   updateGlobalButtons();
   updateButton();
 

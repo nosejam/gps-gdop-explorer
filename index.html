@@ -122,49 +122,43 @@
           <div class="global-controls">
             <button id="global-first" class="secondary-button" type="button" disabled>Process first 24 hours</button>
             <button id="global-last" class="secondary-button" type="button" disabled>Process last 24 hours</button>
-          </div>
-        </div>
-        <p class="muted global-description">Maximum GDOP at the center of every resolution 3 H3 cell, using the selected interval and elevation mask.</p>
-        <div class="status-row">
-          <progress id="global-progress" max="1" value="0"></progress>
-          <output id="global-status" aria-live="polite">Calculate a location time series first.</output>
-        </div>
-        <div id="global-map" aria-label="Global map of maximum GDOP by H3 cell"></div>
-      </section>
-
-      <section class="panel comparison-panel" aria-labelledby="comparison-heading">
-        <div class="section-heading global-heading-row">
-          <div>
-            <span class="step">7</span>
-            <h2 id="comparison-heading">Adjusted constellation comparison</h2>
-          </div>
-          <div class="global-controls">
             <button id="add-adjustment" class="secondary-button" type="button" disabled>+ Add satellite adjustment</button>
             <button id="apply-adjustments" type="button" disabled>Apply adjustments</button>
           </div>
         </div>
-        <p class="muted global-description">Adjust satellite phase for the 24-hour period used by the baseline map, then compare its global maximum GDOP.</p>
+        <p class="muted global-description">Maximum GDOP at the center of every resolution 3 H3 cell. Use the map layer control to compare the real and adjusted almanacs.</p>
         <div class="status-row">
-          <progress id="comparison-progress" max="1" value="0"></progress>
-          <output id="comparison-status" aria-live="polite">Process a baseline global map first.</output>
+          <progress id="global-progress" max="1" value="0"></progress>
+          <output id="global-status" aria-live="polite">Calculate a location time series first.</output>
         </div>
-        <div class="comparison-layout">
+        <button id="toggle-adjustments" class="sidebar-toggle secondary-button" type="button" aria-expanded="true">Hide adjustments</button>
+        <div id="global-map-layout" class="global-map-layout">
           <aside class="adjustment-sidebar">
-            <details open>
-              <summary>Mean anomaly adjustments</summary>
-              <div id="adjustment-list" class="adjustment-list">
-                <p class="muted">No adjustments added.</p>
-              </div>
-            </details>
+            <h3>Mean anomaly adjustments</h3>
+            <p class="muted">Signed along-orbit offsets applied to every selected almanac.</p>
+            <div id="adjustment-list" class="adjustment-list">
+              <p class="muted">No adjustments added.</p>
+            </div>
           </aside>
-          <div id="comparison-map" aria-label="Global maximum GDOP after satellite mean anomaly adjustments"></div>
+          <div id="global-map" aria-label="Global maximum GDOP by H3 cell"></div>
         </div>
+        <section id="global-detail" class="global-detail" hidden>
+          <div class="section-heading">
+            <div>
+              <h3>Selected-cell detail</h3>
+              <span id="global-detail-location" class="muted"></span>
+            </div>
+            <span id="global-detail-status" class="muted"></span>
+          </div>
+          <div id="global-spike-chart" aria-label="GDOP over time for the selected global map location"></div>
+          <div id="global-sky-chart" aria-label="Satellite sky view for the selected global map location and visible time range"></div>
+        </section>
       </section>
     </main>
 
     <dialog id="adjustment-dialog">
       <form id="adjustment-form">
-        <h2>Add satellite adjustment</h2>
+        <h2 id="adjustment-dialog-title">Add satellite adjustment</h2>
         <label>
           Satellite PRN
           <select id="adjustment-prn" required></select>

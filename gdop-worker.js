@@ -3,6 +3,7 @@ const EARTH_ROTATION_RATE = 7.2921151467e-5;
 const WGS84_A = 6378137.0;
 const WGS84_E2 = 6.69437999014e-3;
 const SECONDS_PER_WEEK = 604800;
+const EMPTY_ADJUSTMENTS = new Map();
 
 self.onmessage = ({ data }) => {
   if (data.type !== "calculate") return;
@@ -117,7 +118,7 @@ function inverseTrace4(values, offset) {
   return trace;
 }
 
-function processGroup(almanac, times, startIndex, endIndex, receiver, elevationSin, output, visibleOutput) {
+function processGroup(almanac, times, startIndex, endIndex, receiver, elevationSin, output, visibleOutput, adjustments = EMPTY_ADJUSTMENTS) {
   const count = endIndex - startIndex;
   const maximumSatellites = almanac[3].length;
   const normal = Array.from({ length: 10 }, () => new Float64Array(count));
@@ -146,7 +147,7 @@ function processGroup(almanac, times, startIndex, endIndex, receiver, elevationS
     for (let localIndex = 0; localIndex < count; localIndex += 1) {
       const time = times[startIndex + localIndex];
       const timeFromEpoch = wrapWeek(time - referenceUnixSeconds);
-      const mean = m0 + meanMotion * timeFromEpoch;
+      const mean = m0 + meanMotion * (timeFromEpoch + (adjustments.get(prn) || 0));
       const eccentric = solveEccentricAnomaly(mean, eccentricity);
       const trueAnomaly = Math.atan2(
         Math.sqrt(1 - eccentricity * eccentricity) * Math.sin(eccentric),
@@ -244,6 +245,7 @@ function calculate(options) {
   const gdop = new Float64Array(sampleCount);
   const visible = new Uint8Array(sampleCount);
   const skyChunks = [];
+  const adjustments = new Map(options.adjustments || []);
 
   const groups = [];
   let groupStart = 0;
@@ -269,6 +271,7 @@ function calculate(options) {
       elevationSin,
       gdop,
       visible,
+      adjustments,
     ));
     self.postMessage({
       type: "progress",
