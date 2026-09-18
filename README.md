@@ -10,6 +10,8 @@ The default calculation window is the previous seven UTC days with a 10° elevat
 
 After calculating a location, the global map can process either the first or last 24 hours of the selected range. It evaluates maximum GDOP at the centers of all 41,162 resolution 3 H3 cells using the selected time interval and elevation mask. Satellite propagation runs once per time step in a dedicated worker, while a SIMD WebAssembly kernel evaluates the receiver geometry globally. At lower map zooms, resolution 3 results are aggregated into resolution 0–2 parents using the maximum child value; the overlay repeats across wrapped world copies.
 
+The adjusted-constellation map reuses the exact period, interval, and elevation mask of the most recent global baseline. Add one or more PRNs with signed along-orbit offsets in seconds, then apply them to generate a second map on the same GDOP color scale. Positive offsets advance a satellite's mean anomaly by `mean motion × offset`; negative offsets move it backward. The adjustment is applied to that PRN in every almanac selected during the period.
+
 ## Build the compact dataset
 
 Download any currently available almanacs that are not already present, then rebuild the compact dataset:

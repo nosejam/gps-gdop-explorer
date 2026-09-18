@@ -22,6 +22,17 @@ const elements = {
   globalProgress: document.querySelector("#global-progress"),
   globalStatus: document.querySelector("#global-status"),
   globalMap: document.querySelector("#global-map"),
+  addAdjustment: document.querySelector("#add-adjustment"),
+  applyAdjustments: document.querySelector("#apply-adjustments"),
+  adjustmentDialog: document.querySelector("#adjustment-dialog"),
+  adjustmentForm: document.querySelector("#adjustment-form"),
+  adjustmentPrn: document.querySelector("#adjustment-prn"),
+  adjustmentSeconds: document.querySelector("#adjustment-seconds"),
+  cancelAdjustment: document.querySelector("#cancel-adjustment"),
+  adjustmentList: document.querySelector("#adjustment-list"),
+  comparisonProgress: document.querySelector("#comparison-progress"),
+  comparisonStatus: document.querySelector("#comparison-status"),
+  comparisonMap: document.querySelector("#comparison-map"),
 };
 
 let location = null;
@@ -31,11 +42,11 @@ let currentResult = null;
 let synchronizingPlots = false;
 let polarRenderTimer = null;
 let globalWorker = null;
+let comparisonWorker = null;
 let globalGrid = null;
-let globalLayer = null;
-let globalDisplay = null;
-let globalRenderGeneration = 0;
-let globalRenderTimer = null;
+let baselineRequest = null;
+let availableAdjustmentPrns = [];
+const satelliteAdjustments = new Map();
 
 const map = L.map("map", { worldCopyJump: true }).setView([25, 0], 2);
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -51,24 +62,36 @@ const markerIcon = L.divIcon({
 });
 let marker = null;
 
-const globalMap = L.map("global-map", {
-  worldCopyJump: true,
-  preferCanvas: true,
-  zoomSnap: 0.5,
-}).setView([15, 0], 1.5);
-const globalRenderer = L.canvas({ padding: 0.5 });
-L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  maxZoom: 8,
-  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-}).addTo(globalMap);
+function createGlobalMap(elementId, resolutionId) {
+  const leafletMap = L.map(elementId, {
+    worldCopyJump: true,
+    preferCanvas: true,
+    zoomSnap: 0.5,
+  }).setView([15, 0], 1.5);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 8,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+  }).addTo(leafletMap);
+  const legend = L.control({ position: "bottomright" });
+  legend.onAdd = () => {
+    const container = L.DomUtil.create("div", "global-legend");
+    container.innerHTML = `<strong>Maximum GDOP</strong><br><span id="${resolutionId}">H3 resolution 1</span><div class="global-legend-gradient"></div><div class="global-legend-labels"><span>1</span><span>5.5</span><span>10+</span></div>`;
+    return container;
+  };
+  legend.addTo(leafletMap);
+  return {
+    map: leafletMap,
+    renderer: L.canvas({ padding: 0.5 }),
+    resolutionId,
+    layer: null,
+    display: null,
+    renderGeneration: 0,
+    renderTimer: null,
+  };
+}
 
-const globalLegend = L.control({ position: "bottomright" });
-globalLegend.onAdd = () => {
-  const container = L.DomUtil.create("div", "global-legend");
-  container.innerHTML = '<strong>Maximum GDOP</strong><br><span id="global-resolution">H3 resolution 1</span><div class="global-legend-gradient"></div><div class="global-legend-labels"><span>1</span><span>5.5</span><span>10+</span></div>';
-  return container;
-};
-globalLegend.addTo(globalMap);
+const baselineView = createGlobalMap("global-map", "global-resolution");
+const comparisonView = createGlobalMap("comparison-map", "comparison-resolution");
 
 map.on("click", ({ latlng }) => {
   location = { latitude: latlng.lat, longitude: latlng.lng };
@@ -90,13 +113,16 @@ elements.start.value = utcInputValue(defaultStart);
 elements.end.value = utcInputValue(defaultEnd);
 
 function updateButton() {
-  elements.calculate.disabled = !location || !almanacData || Boolean(worker) || Boolean(globalWorker);
+  elements.calculate.disabled = !location || !almanacData || Boolean(worker) || Boolean(globalWorker) || Boolean(comparisonWorker);
 }
 
 function updateGlobalButtons() {
-  const disabled = !currentResult || Boolean(globalWorker);
+  const disabled = !currentResult || Boolean(globalWorker) || Boolean(comparisonWorker);
   elements.globalFirst.disabled = disabled;
   elements.globalLast.disabled = disabled;
+  elements.addAdjustment.disabled = !baselineRequest || Boolean(comparisonWorker);
+  elements.applyAdjustments.disabled =
+    !baselineRequest || satelliteAdjustments.size === 0 || Boolean(comparisonWorker);
 }
 
 function parseUtcInput(input) {
@@ -413,62 +439,61 @@ function aggregateGlobalMap(data, rangeLabel) {
   };
 }
 
-function visibleWorldOffsets() {
-  const bounds = globalMap.getBounds();
+function visibleWorldOffsets(view) {
+  const bounds = view.map.getBounds();
   const first = Math.floor((bounds.getWest() + 180) / 360);
   const last = Math.floor((bounds.getEast() + 180 - 1e-7) / 360);
   return Array.from({ length: Math.max(1, last - first + 1) }, (_, index) => (first + index) * 360);
 }
 
-async function renderGlobalMap() {
-  if (!globalDisplay) return;
-  const generation = ++globalRenderGeneration;
-  if (globalLayer) globalMap.removeLayer(globalLayer);
-  globalLayer = L.layerGroup().addTo(globalMap);
+async function renderGlobalMap(view) {
+  if (!view.display) return;
+  const generation = ++view.renderGeneration;
+  if (view.layer) view.map.removeLayer(view.layer);
+  view.layer = L.layerGroup().addTo(view.map);
   const grid = prepareGlobalGrid();
-  const resolution = Math.max(0, Math.min(3, Math.floor(globalMap.getZoom())));
-  const entries = globalDisplay.levels[resolution];
-  const worldOffsets = visibleWorldOffsets();
-  const resolutionLabel = document.querySelector("#global-resolution");
+  const resolution = Math.max(0, Math.min(3, Math.floor(view.map.getZoom())));
+  const entries = view.display.levels[resolution];
+  const worldOffsets = visibleWorldOffsets(view);
+  const resolutionLabel = document.querySelector(`#${view.resolutionId}`);
   if (resolutionLabel) resolutionLabel.textContent = `H3 resolution ${resolution}`;
 
   let drawn = 0;
   const total = entries.length * worldOffsets.length;
   for (const longitudeOffset of worldOffsets) {
     for (let first = 0; first < entries.length; first += 500) {
-      if (generation !== globalRenderGeneration) return;
+      if (generation !== view.renderGeneration) return;
       const end = Math.min(entries.length, first + 500);
       for (let index = first; index < end; index += 1) {
         const entry = entries[index];
         const sourceIndex = entry.sourceIndex;
         const value = entry.value;
-        const time = globalDisplay.data.maximumStep[sourceIndex] >= 0
-          ? new Date((globalDisplay.data.startUnixSeconds + globalDisplay.data.maximumStep[sourceIndex] * globalDisplay.data.intervalSeconds) * 1000)
+        const time = view.display.data.maximumStep[sourceIndex] >= 0
+          ? new Date((view.display.data.startUnixSeconds + view.display.data.maximumStep[sourceIndex] * view.display.data.intervalSeconds) * 1000)
             .toISOString().slice(0, 16).replace("T", " ")
           : "No valid geometry";
         const sourceDescription = resolution === 3
           ? `Center ${grid.latitudes[sourceIndex].toFixed(3)}°, ${grid.longitudes[sourceIndex].toFixed(3)}°`
           : `Worst child center ${grid.latitudes[sourceIndex].toFixed(3)}°, ${grid.longitudes[sourceIndex].toFixed(3)}°`;
         const popup = Number.isFinite(value)
-          ? `<strong>${entry.cell}</strong><br>${sourceDescription}<br>Maximum GDOP ${value.toFixed(3)}<br>${time} UTC<br>${globalDisplay.data.visible[sourceIndex]} visible satellites`
+          ? `<strong>${entry.cell}</strong><br>${sourceDescription}<br>Maximum GDOP ${value.toFixed(3)}<br>${time} UTC<br>${view.display.data.visible[sourceIndex]} visible satellites`
           : `<strong>${entry.cell}</strong><br>No valid geometry`;
         const color = globalGdopColor(value);
         L.polygon(cellBoundaryNearCenter(entry.cell, entry.longitude, longitudeOffset), {
-          renderer: globalRenderer,
+          renderer: view.renderer,
           stroke: false,
           fill: true,
           fillColor: color,
           fillOpacity: 0.74,
-        }).bindPopup(popup).addTo(globalLayer);
+        }).bindPopup(popup).addTo(view.layer);
       }
       drawn += end - first;
-      elements.globalProgress.value = 0.95 + 0.05 * drawn / total;
       await new Promise((resolve) => requestAnimationFrame(resolve));
     }
   }
 }
 
-async function drawGlobalMap(data, rangeLabel) {
+async function drawGlobalMap(view, data, rangeLabel, progress, status) {
   const grid = prepareGlobalGrid();
   let worstIndex = -1;
   let worstValue = -Infinity;
@@ -478,30 +503,34 @@ async function drawGlobalMap(data, rangeLabel) {
       worstIndex = index;
     }
   }
-  globalDisplay = aggregateGlobalMap(data, rangeLabel);
-  await renderGlobalMap();
-  elements.globalProgress.value = 1;
+  view.display = aggregateGlobalMap(data, rangeLabel);
+  view.worstValue = worstValue;
+  view.worstIndex = worstIndex;
+  await renderGlobalMap(view);
+  progress.value = 1;
   if (worstIndex >= 0) {
     const worstTime = new Date(
       (data.startUnixSeconds + data.maximumStep[worstIndex] * data.intervalSeconds) * 1000,
     ).toISOString().slice(0, 16).replace("T", " ");
-    elements.globalStatus.value = `${rangeLabel}: worst sampled GDOP ${worstValue.toFixed(2)} near ${grid.latitudes[worstIndex].toFixed(2)}°, ${grid.longitudes[worstIndex].toFixed(2)}° at ${worstTime} UTC.`;
+    status.value = `${rangeLabel}: worst sampled GDOP ${worstValue.toFixed(2)} near ${grid.latitudes[worstIndex].toFixed(2)}°, ${grid.longitudes[worstIndex].toFixed(2)}° at ${worstTime} UTC.`;
   } else {
-    elements.globalStatus.value = `${rangeLabel}: no cells had valid geometry.`;
+    status.value = `${rangeLabel}: no cells had valid geometry.`;
   }
 }
 
-function scheduleGlobalMapRender() {
-  clearTimeout(globalRenderTimer);
-  globalRenderTimer = setTimeout(renderGlobalMap, 75);
+function scheduleGlobalMapRender(view) {
+  clearTimeout(view.renderTimer);
+  view.renderTimer = setTimeout(() => renderGlobalMap(view), 75);
 }
 
-globalMap.on("zoomend moveend", () => {
-  if (globalDisplay) scheduleGlobalMapRender();
-});
+for (const view of [baselineView, comparisonView]) {
+  view.map.on("zoomend moveend", () => {
+    if (view.display) scheduleGlobalMapRender(view);
+  });
+}
 
 function processGlobalRange(which) {
-  if (!currentResult || globalWorker) return;
+  if (!currentResult || globalWorker || comparisonWorker) return;
   let grid;
   try {
     grid = prepareGlobalGrid();
@@ -518,6 +547,14 @@ function processGlobalRange(which) {
     ? Math.min(currentResult.fullEnd, currentResult.fullStart + daySeconds)
     : currentResult.fullEnd;
   const rangeLabel = which === "first" ? "First 24 hours" : "Last 24 hours";
+  baselineRequest = null;
+  satelliteAdjustments.clear();
+  renderAdjustmentList();
+  comparisonView.display = null;
+  if (comparisonView.layer) comparisonView.map.removeLayer(comparisonView.layer);
+  comparisonView.layer = null;
+  elements.comparisonProgress.value = 0;
+  elements.comparisonStatus.value = "Waiting for the new baseline map.";
   globalWorker = new Worker("global-gdop-worker.js");
   updateGlobalButtons();
   updateButton();
@@ -541,9 +578,19 @@ function processGlobalRange(which) {
     if (data.type === "result") {
       globalWorker.terminate();
       globalWorker = null;
-      updateGlobalButtons();
       updateButton();
-      await drawGlobalMap(data, rangeLabel);
+      await drawGlobalMap(baselineView, data, rangeLabel, elements.globalProgress, elements.globalStatus);
+      baselineRequest = {
+        startUnixSeconds,
+        endUnixSeconds,
+        intervalSeconds: currentResult.intervalSeconds,
+        elevationMaskDegrees: currentResult.elevationMaskDegrees,
+        rangeLabel,
+      };
+      availableAdjustmentPrns = adjustmentPrnsForRange(baselineRequest);
+      populateAdjustmentPrns();
+      elements.comparisonStatus.value = "Add one or more satellite phase adjustments.";
+      updateGlobalButtons();
     }
   };
   globalWorker.onerror = ({ message }) => {
@@ -564,6 +611,134 @@ function processGlobalRange(which) {
     endUnixSeconds,
     intervalSeconds: currentResult.intervalSeconds,
     elevationMaskDegrees: currentResult.elevationMaskDegrees,
+    adjustments: [],
+  }, [latitudes.buffer, longitudes.buffer]);
+}
+
+function nearestAlmanacForTime(unixSeconds) {
+  const almanacs = almanacData.almanacs;
+  let low = 0;
+  let high = almanacs.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (almanacs[middle][0] < unixSeconds) low = middle + 1;
+    else high = middle;
+  }
+  if (low === 0) return almanacs[0];
+  if (low === almanacs.length) return almanacs[almanacs.length - 1];
+  return unixSeconds - almanacs[low - 1][0] <= almanacs[low][0] - unixSeconds
+    ? almanacs[low - 1]
+    : almanacs[low];
+}
+
+function adjustmentPrnsForRange(request) {
+  const prns = new Set();
+  const sampleCount = Math.floor(
+    (request.endUnixSeconds - request.startUnixSeconds) / request.intervalSeconds,
+  ) + 1;
+  for (let step = 0; step < sampleCount; step += 1) {
+    const almanac = nearestAlmanacForTime(request.startUnixSeconds + step * request.intervalSeconds);
+    for (const [prn, health] of almanac[3]) if (health === 0) prns.add(prn);
+  }
+  return Array.from(prns).sort((a, b) => a - b);
+}
+
+function populateAdjustmentPrns() {
+  elements.adjustmentPrn.replaceChildren(...availableAdjustmentPrns.map((prn) => {
+    const option = document.createElement("option");
+    option.value = String(prn);
+    option.textContent = `PRN ${prn}`;
+    return option;
+  }));
+}
+
+function renderAdjustmentList() {
+  if (satelliteAdjustments.size === 0) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "No adjustments added.";
+    elements.adjustmentList.replaceChildren(empty);
+  } else {
+    const rows = Array.from(satelliteAdjustments.entries())
+      .sort(([first], [second]) => first - second)
+      .map(([prn, seconds]) => {
+        const row = document.createElement("div");
+        row.className = "adjustment-row";
+        const text = document.createElement("span");
+        text.textContent = `PRN ${prn}: ${seconds > 0 ? "+" : ""}${seconds} s`;
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "secondary-button";
+        remove.textContent = "Remove";
+        remove.addEventListener("click", () => {
+          satelliteAdjustments.delete(prn);
+          renderAdjustmentList();
+        });
+        row.append(text, remove);
+        return row;
+      });
+    elements.adjustmentList.replaceChildren(...rows);
+  }
+  updateGlobalButtons();
+}
+
+function processAdjustedGlobalMap() {
+  if (!baselineRequest || comparisonWorker || satelliteAdjustments.size === 0) return;
+  const grid = prepareGlobalGrid();
+  const adjustments = Array.from(satelliteAdjustments.entries());
+  comparisonWorker = new Worker("global-gdop-worker.js");
+  updateGlobalButtons();
+  updateButton();
+  elements.comparisonProgress.value = 0;
+  elements.comparisonStatus.value = `Applying ${adjustments.length} satellite adjustment${adjustments.length === 1 ? "" : "s"}…`;
+  comparisonWorker.onmessage = async ({ data }) => {
+    if (data.type === "progress") {
+      elements.comparisonProgress.value = data.fraction * 0.95;
+      elements.comparisonStatus.value = data.message.replace("Global map", "Adjusted map");
+      return;
+    }
+    if (data.type === "error") {
+      elements.comparisonStatus.value = `Adjusted calculation failed: ${data.message}`;
+      comparisonWorker.terminate();
+      comparisonWorker = null;
+      updateGlobalButtons();
+      updateButton();
+      return;
+    }
+    if (data.type === "result") {
+      comparisonWorker.terminate();
+      comparisonWorker = null;
+      await drawGlobalMap(
+        comparisonView,
+        data,
+        `${baselineRequest.rangeLabel}, adjusted`,
+        elements.comparisonProgress,
+        elements.comparisonStatus,
+      );
+      if (Number.isFinite(baselineView.worstValue) && Number.isFinite(comparisonView.worstValue)) {
+        const difference = comparisonView.worstValue - baselineView.worstValue;
+        elements.comparisonStatus.value += ` Global worst-case change: ${difference >= 0 ? "+" : ""}${difference.toFixed(2)} GDOP.`;
+      }
+      updateGlobalButtons();
+      updateButton();
+    }
+  };
+  comparisonWorker.onerror = ({ message }) => {
+    elements.comparisonStatus.value = `Adjusted calculation failed: ${message}`;
+    comparisonWorker?.terminate();
+    comparisonWorker = null;
+    updateGlobalButtons();
+    updateButton();
+  };
+  const latitudes = grid.latitudes.slice();
+  const longitudes = grid.longitudes.slice();
+  comparisonWorker.postMessage({
+    type: "calculate",
+    almanacs: almanacData.almanacs,
+    latitudes,
+    longitudes,
+    ...baselineRequest,
+    adjustments,
   }, [latitudes.buffer, longitudes.buffer]);
 }
 
@@ -682,6 +857,30 @@ elements.threshold.addEventListener("input", schedulePolarRender);
 elements.threshold.addEventListener("change", schedulePolarRender);
 elements.globalFirst.addEventListener("click", () => processGlobalRange("first"));
 elements.globalLast.addEventListener("click", () => processGlobalRange("last"));
+elements.addAdjustment.addEventListener("click", () => {
+  populateAdjustmentPrns();
+  elements.adjustmentSeconds.value = "0";
+  elements.adjustmentDialog.showModal();
+});
+elements.cancelAdjustment.addEventListener("click", () => elements.adjustmentDialog.close());
+elements.adjustmentForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const prn = Number(elements.adjustmentPrn.value);
+  const seconds = Number(elements.adjustmentSeconds.value);
+  if (!availableAdjustmentPrns.includes(prn) || !Number.isFinite(seconds) || seconds === 0) {
+    elements.adjustmentSeconds.setCustomValidity("Enter a nonzero number of seconds.");
+    elements.adjustmentSeconds.reportValidity();
+    return;
+  }
+  elements.adjustmentSeconds.setCustomValidity("");
+  satelliteAdjustments.set(prn, seconds);
+  elements.adjustmentDialog.close();
+  renderAdjustmentList();
+});
+elements.adjustmentSeconds.addEventListener("input", () => {
+  elements.adjustmentSeconds.setCustomValidity("");
+});
+elements.applyAdjustments.addEventListener("click", processAdjustedGlobalMap);
 elements.resetPolar.addEventListener("click", () => {
   Plotly.relayout("polar-chart", {
     "polar.radialaxis.range": [0, 90],
@@ -717,6 +916,11 @@ elements.form.addEventListener("submit", (event) => {
   elements.resultSummary.textContent = "";
   elements.threshold.disabled = true;
   currentResult = null;
+  baselineRequest = null;
+  availableAdjustmentPrns = [];
+  satelliteAdjustments.clear();
+  renderAdjustmentList();
+  elements.comparisonStatus.value = "Process a baseline global map first.";
   updateGlobalButtons();
   updateButton();
 

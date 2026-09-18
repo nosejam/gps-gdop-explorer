@@ -131,7 +131,58 @@
         </div>
         <div id="global-map" aria-label="Global map of maximum GDOP by H3 cell"></div>
       </section>
+
+      <section class="panel comparison-panel" aria-labelledby="comparison-heading">
+        <div class="section-heading global-heading-row">
+          <div>
+            <span class="step">7</span>
+            <h2 id="comparison-heading">Adjusted constellation comparison</h2>
+          </div>
+          <div class="global-controls">
+            <button id="add-adjustment" class="secondary-button" type="button" disabled>+ Add satellite adjustment</button>
+            <button id="apply-adjustments" type="button" disabled>Apply adjustments</button>
+          </div>
+        </div>
+        <p class="muted global-description">Adjust satellite phase for the 24-hour period used by the baseline map, then compare its global maximum GDOP.</p>
+        <div class="status-row">
+          <progress id="comparison-progress" max="1" value="0"></progress>
+          <output id="comparison-status" aria-live="polite">Process a baseline global map first.</output>
+        </div>
+        <div class="comparison-layout">
+          <aside class="adjustment-sidebar">
+            <details open>
+              <summary>Mean anomaly adjustments</summary>
+              <div id="adjustment-list" class="adjustment-list">
+                <p class="muted">No adjustments added.</p>
+              </div>
+            </details>
+          </aside>
+          <div id="comparison-map" aria-label="Global maximum GDOP after satellite mean anomaly adjustments"></div>
+        </div>
+      </section>
     </main>
+
+    <dialog id="adjustment-dialog">
+      <form id="adjustment-form">
+        <h2>Add satellite adjustment</h2>
+        <label>
+          Satellite PRN
+          <select id="adjustment-prn" required></select>
+        </label>
+        <label>
+          Along-orbit shift
+          <span class="input-with-unit">
+            <input id="adjustment-seconds" type="number" step="1" value="0" required />
+            <span>seconds</span>
+          </span>
+        </label>
+        <p class="muted">Positive values advance the satellite; negative values move it backward.</p>
+        <div class="dialog-actions">
+          <button id="cancel-adjustment" class="secondary-button" type="button">Cancel</button>
+          <button type="submit">Add adjustment</button>
+        </div>
+      </form>
+    </dialog>
 
     <footer>
       Almanac-based positions are approximate. Times are UTC; unhealthy satellites and satellites below the elevation mask are excluded.

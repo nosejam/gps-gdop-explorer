@@ -39,18 +39,18 @@ function solveEccentricAnomaly(meanAnomaly, eccentricity) {
   return eccentricAnomaly;
 }
 
-function satellitePositions(almanac, time, outputX, outputY, outputZ) {
+function satellitePositions(almanac, time, outputX, outputY, outputZ, adjustments) {
   const referenceUnixSeconds = almanac[0];
   const toa = almanac[2];
   let count = 0;
   for (const satellite of almanac[3]) {
-    const [, health, eccentricity, inclinationOffset, ascensionRate, sqrtA, ascension, argumentPerigee, meanAnomaly] = satellite;
+    const [prn, health, eccentricity, inclinationOffset, ascensionRate, sqrtA, ascension, argumentPerigee, meanAnomaly] = satellite;
     if (health !== 0) continue;
     const semiMajorAxis = sqrtA * sqrtA;
     const meanMotion = Math.sqrt(GPS_MU / (semiMajorAxis ** 3));
     const inclination = (0.3 + inclinationOffset) * Math.PI;
     const timeFromEpoch = wrapWeek(time - referenceUnixSeconds);
-    const mean = meanAnomaly * Math.PI + meanMotion * timeFromEpoch;
+    const mean = meanAnomaly * Math.PI + meanMotion * (timeFromEpoch + (adjustments.get(prn) || 0));
     const eccentric = solveEccentricAnomaly(mean, eccentricity);
     const trueAnomaly = Math.atan2(
       Math.sqrt(1 - eccentricity * eccentricity) * Math.sin(eccentric),
@@ -127,11 +127,12 @@ self.onmessage = async ({ data }) => {
     const satelliteZ = new Float64Array(memory.buffer, satellitePointers[2], 32);
     const sampleCount = Math.floor((data.endUnixSeconds - data.startUnixSeconds) / data.intervalSeconds) + 1;
     const elevationSin = Math.sin(data.elevationMaskDegrees * Math.PI / 180);
+    const adjustments = new Map(data.adjustments || []);
 
     for (let step = 0; step < sampleCount; step += 1) {
       const time = data.startUnixSeconds + step * data.intervalSeconds;
       const almanac = data.almanacs[nearestAlmanacIndex(data.almanacs, time)];
-      const satelliteCount = satellitePositions(almanac, time, satelliteX, satelliteY, satelliteZ);
+      const satelliteCount = satellitePositions(almanac, time, satelliteX, satelliteY, satelliteZ, adjustments);
       wasm.processStep(
         count,
         ...receiverPointers,
