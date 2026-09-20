@@ -194,6 +194,12 @@ async function loadData() {
     const response = await fetch(DATA_URL);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     almanacData = await response.json();
+    try {
+      window.AlmanacHistory.initialize(almanacData);
+    } catch (error) {
+      console.error("Could not initialize Almanac History", error);
+      document.querySelector("#history-summary").textContent = "History unavailable";
+    }
     elements.dataSummary.textContent = `${almanacData.almanacs.length} snapshots · ${almanacData.years.join("–")}`;
     elements.status.value = "Select a location to begin.";
     updateButton();

@@ -14,6 +14,16 @@ The global map has exclusive **Real SEM almanac** and **Adjusted SEM almanac** l
 
 Clicking the global map calculates a GDOP time series and satellite sky view at that location for the active almanac layer. Zooming or resetting the selected-location time-series changes the time window represented by its sky view.
 
+## Almanac History
+
+The **Almanac History** panel works directly from every reference epoch in the compact dataset and does not require a receiver location or a GDOP calculation. It plots one Plotly `scattergl` trace per PRN, with stable colors for geometrically identified orbital planes A–F. Plane centers are clustered at the newest healthy snapshot and followed backward through their common RAAN precession rather than assigning planes from fixed RAAN ranges.
+
+Available values include orbital period and period offset, semi-major axis and its offset, RAAN, RAAN rate, eccentricity, argument of perigee, mean anomaly, mean argument of latitude, and relative slot phase. Orbital period is derived from the SEM semi-major axis using `μ = 3.986005e14 m³/s²`; offsets use a clearly defined nominal GPS semi-major-axis reference of 26,560,000 m. Angular values can be wrapped or independently unwrapped for every PRN, and any metric can be shown as change from its first visible sample.
+
+Mean argument of latitude is `ω + M`: argument of perigee plus mean anomaly. It is a mean along-orbit phase coordinate, not true argument of latitude, which would use true anomaly. Relative slot phase removes common rotation using a persistent healthy reference satellite in each plane; a trace is broken if that reference must change.
+
+Optional **possible orbital change** markers identify consecutive records where `|Δa| > 100 m` or `|Δperiod| > 0.25 s`. These are screening indicators derived from low-precision SEM almanacs, not authoritative maneuver records. SEM values and all quantities derived from them are intended for constellation-history and geometry analysis rather than precision orbit determination.
+
 ## Build the compact dataset
 
 Download any currently available almanacs that are not already present, then rebuild the compact dataset:

@@ -8,7 +8,7 @@
     "build:data": "node scripts/convert-almanacs.js",
     "build": "npm run download && npm run build:data",
     "build:wasm": "asc assembly/global-gdop.ts -o wasm/global-gdop.wasm --optimize --enable simd --runtime stub --noAssert --importMemory",
-    "check": "node --check app.js && node --check gdop-worker.js && node --check global-gdop-worker.js && node --check scripts/download-almanacs.js && node --check scripts/convert-almanacs.js && test -s wasm/global-gdop.wasm",
+    "check": "node --check app.js && node --check almanac-history.js && node --check gdop-worker.js && node --check global-gdop-worker.js && node --check scripts/download-almanacs.js && node --check scripts/convert-almanacs.js && node scripts/check-history-math.js && test -s wasm/global-gdop.wasm",
     "serve": "python3 -m http.server 8000"
   },
   "engines": {

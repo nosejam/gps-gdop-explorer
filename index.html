@@ -113,10 +113,98 @@
         <div id="polar-chart" aria-label="Polar plot of satellite locations above the GDOP threshold"></div>
       </section>
 
+      <section class="panel history-panel" aria-labelledby="history-heading">
+        <div class="section-heading">
+          <div>
+            <span class="step">6</span>
+            <h2 id="history-heading">Almanac History</h2>
+          </div>
+          <span id="history-summary" class="muted">Loading almanac history…</span>
+        </div>
+        <p class="muted history-description">Explore SEM orbital elements and derived quantities at each almanac reference epoch. Plane assignments follow the constellation’s drifting RAAN clusters.</p>
+        <div class="history-controls">
+          <label>Metric
+            <select id="history-metric">
+              <option value="periodOffset" selected>Orbital period offset</option>
+              <option value="period">Orbital period</option>
+              <option value="semiMajorAxis">Semi-major axis</option>
+              <option value="semiMajorAxisOffset">Semi-major-axis offset</option>
+              <option value="raan">RAAN</option>
+              <option value="meanArgumentLatitude">Mean argument of latitude</option>
+              <option value="relativePhase">Relative slot phase</option>
+              <option value="eccentricity">Eccentricity</option>
+              <option value="argumentPerigee">Argument of perigee</option>
+              <option value="meanAnomaly">Mean anomaly</option>
+              <option value="raanRate">RAAN rate</option>
+            </select>
+          </label>
+          <label>Start
+            <input id="history-start" type="date" />
+          </label>
+          <label>End
+            <input id="history-end" type="date" />
+          </label>
+          <div class="history-control"><span>Display</span>
+            <details id="history-prn-menu" class="history-menu">
+              <summary id="history-prn-summary">All satellites</summary>
+              <div id="history-prns" class="history-prn-list"></div>
+            </details>
+          </div>
+          <div class="history-control"><span>Highlight PRNs</span>
+            <details class="history-menu">
+              <summary id="history-highlight-summary">None</summary>
+              <div id="history-highlights" class="history-highlight-list"></div>
+            </details>
+          </div>
+          <label id="history-reference-control" hidden>Relative phase reference
+            <select id="history-reference"><option value="auto">Automatic plane reference</option></select>
+          </label>
+        </div>
+        <fieldset class="history-options">
+          <legend>Plane filters</legend>
+          <div id="history-plane-filters" class="history-inline-options"></div>
+        </fieldset>
+        <fieldset class="history-options">
+          <legend>Options</legend>
+          <div class="history-inline-options">
+            <label><input id="history-unhealthy" type="checkbox" /> Include unhealthy satellites</label>
+            <label><input id="history-changes" type="checkbox" /> Show change/maneuver markers</label>
+          </div>
+        </fieldset>
+        <fieldset id="history-angular-options" class="history-options" hidden>
+          <legend>Angular display</legend>
+          <div class="history-inline-options">
+            <label><input type="radio" name="history-angle" value="wrapped" checked /> Wrapped 0–360°</label>
+            <label><input type="radio" name="history-angle" value="continuous" /> Continuous / unwrapped</label>
+          </div>
+        </fieldset>
+        <fieldset class="history-options">
+          <legend>Chart layout</legend>
+          <div class="history-inline-options">
+            <label><input type="radio" name="history-layout" value="combined" checked /> Combined</label>
+            <label><input type="radio" name="history-layout" value="planes" /> Separate by orbital plane</label>
+          </div>
+        </fieldset>
+        <fieldset class="history-options">
+          <legend>Normalize</legend>
+          <div class="history-inline-options">
+            <label><input type="radio" name="history-normalize" value="absolute" checked /> Absolute</label>
+            <label><input type="radio" name="history-normalize" value="change" /> Change from first visible sample</label>
+          </div>
+        </fieldset>
+        <p id="history-help" class="muted history-help"></p>
+        <div class="history-actions">
+          <button id="history-select-all" class="secondary-button" type="button">Select all PRNs</button>
+          <button id="history-clear" class="secondary-button" type="button">Clear PRNs</button>
+          <button id="history-reset" class="secondary-button" type="button">Reset zoom</button>
+        </div>
+        <div id="history-chart" aria-label="Historical GPS almanac orbital data"></div>
+      </section>
+
       <section class="panel global-panel" aria-labelledby="global-heading">
         <div class="section-heading global-heading-row">
           <div>
-            <span class="step">6</span>
+            <span class="step">7</span>
             <h2 id="global-heading">Global maximum GDOP</h2>
           </div>
           <div class="global-controls">
@@ -189,6 +277,7 @@
     ></script>
     <script src="https://cdn.plot.ly/plotly-4.0.0.min.js" charset="utf-8"></script>
     <script src="https://cdn.jsdelivr.net/npm/h3-js@4.5.0/dist/h3-js.umd.js"></script>
+    <script src="almanac-history.js"></script>
     <script type="module" src="app.js"></script>
   </body>
 </html>
