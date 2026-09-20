@@ -426,7 +426,7 @@ function initializeAlmanacHistory(almanacData) {
         text.push(hoverText(record, rawValues[index].referencePrn));
         const changeMarker = elements.changes.checked && record.possibleChange;
         symbols.push(changeMarker ? "diamond" : record.health === 0 ? SYMBOLS[prn % SYMBOLS.length] : "x");
-        sizes.push(changeMarker ? 9 : record.health === 0 ? 3 : 7);
+        sizes.push(changeMarker ? 10 : record.health === 0 ? 5 : 7);
         previousRaw = rawValue;
       });
       if (!x.length) return;
@@ -444,9 +444,15 @@ function initializeAlmanacHistory(almanacData) {
         legendgrouptitle: firstInPlane.has(plane) ? undefined : { text: `Plane ${plane}` },
         xaxis: separate ? `x${planeIndex + 1}` : "x",
         yaxis: separate ? `y${planeIndex + 1}` : "y",
-        line: { color: PLANE_COLORS[plane], width: highlighted ? 2.5 : 1, dash: DASHES[prn % DASHES.length] },
-        marker: { color: PLANE_COLORS[plane], symbol: symbols, size: sizes, opacity: highlighted ? 0.9 : 0.22 },
-        opacity: highlighted ? 0.9 : 0.18,
+        line: { color: PLANE_COLORS[plane], width: highlighted ? 2.25 : 1.4, dash: DASHES[prn % DASHES.length] },
+        marker: {
+          color: PLANE_COLORS[plane],
+          symbol: symbols,
+          size: sizes,
+          opacity: 1,
+          line: { width: 0 },
+        },
+        opacity: highlighted ? 1 : 0.18,
         connectgaps: false,
         hovertemplate: "%{text}<extra></extra>",
       });
