@@ -29,7 +29,7 @@ async function downloadYear(year) {
       ? utcDayOfYear(now)
       : 0;
   const outputDirectory = path.join(outputRoot, String(year));
-  const baseUrl = `https://www.navcen.uscg.gov/sites/default/files/gps/almanac/${year}/Sem`;
+  const baseUrl = `https://navcen.uscg.gov/sites/default/files/gps/almanac/${year}/Sem`;
   fs.mkdirSync(outputDirectory, { recursive: true });
   const totals = { year, throughDay: lastDay, downloaded: 0, alreadyPresent: 0, unavailable: 0 };
 
